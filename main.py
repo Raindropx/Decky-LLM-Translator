@@ -14,6 +14,9 @@ import re
 import json
 import base64
 import tarfile
+import shutil
+import glob
+from urllib.parse import urlparse, unquote
 
 # IMPORTANT: Set up plugin directory FIRST
 PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -1175,6 +1178,73 @@ class Plugin:
     _gemini_api_key: str = ""
     _gemini_model: str = "gemini-2.5-flash"
 
+    _capture_backend = None  # "pipewire" | "spectacle" | "portal" | None; chosen lazily per session
+    _session_env = None  # session env (XDG_CURRENT_DESKTOP, DBUS, WAYLAND...) borrowed from a user-owned graphical process
+
+    def _load_session_env(self):
+        # plugin_loader.service starts at boot with no graphical env, so borrow one from a running desktop process.
+        uid = os.getuid()
+        desktop_comms = {'plasmashell', 'kwin_wayland', 'kwin_x11', 'gnome-shell', 'sway', 'Hyprland'}
+        for proc_path in glob.glob('/proc/[0-9]*'):
+            try:
+                if os.stat(proc_path).st_uid != uid:
+                    continue
+                with open(os.path.join(proc_path, 'comm')) as f:
+                    if f.read().strip() not in desktop_comms:
+                        continue
+                with open(os.path.join(proc_path, 'environ'), 'rb') as f:
+                    data = f.read()
+            except (OSError, PermissionError):
+                continue
+            result = {}
+            for entry in data.split(b'\0'):
+                if not entry:
+                    continue
+                k, _, v = entry.decode(errors='ignore').partition('=')
+                if k:
+                    result[k] = v
+            return result
+        return {}
+
+    def _clean_system_binary_env(self, env):
+        # Strip PyInstaller bootloader paths so system binaries link against the system libs, not the frozen ones.
+        clean = dict(env)
+        for k in ("LD_LIBRARY_PATH", "LD_PRELOAD", "PYTHONHOME", "PYTHONPATH", "_MEIPASS", "_MEIPASS2"):
+            clean.pop(k, None)
+        orig = env.get("LD_LIBRARY_PATH_ORIG")
+        if orig:
+            clean["LD_LIBRARY_PATH"] = orig
+        return clean
+
+    async def _select_capture_backend(self, env):
+        # pipewiresrc needs a Video/Source node; gamescope publishes one in Game Mode, KDE desktop mode does not.
+        has_video_source = False
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                '/usr/bin/pw-dump', stdout=PIPE, stderr=PIPE, env=env
+            )
+            out, _ = await asyncio.wait_for(proc.communicate(), timeout=2.0)
+            nodes = json.loads(out)
+            for n in nodes:
+                props = (n.get('info') or {}).get('props') or {}
+                if props.get('media.class') == 'Video/Source':
+                    has_video_source = True
+                    break
+        except Exception as e:
+            logger.warning(f"pw-dump backend probe failed: {e}")
+
+        if has_video_source:
+            backend = "pipewire"
+        elif "KDE" in env.get("XDG_CURRENT_DESKTOP", "") and os.path.exists("/usr/bin/spectacle"):
+            backend = "spectacle"
+        elif os.path.exists("/usr/bin/gdbus"):
+            backend = "portal"
+        else:
+            backend = None
+
+        logger.info(f"Capture backend: {backend}")
+        return backend
+
     # Generic settings handlers
     async def get_setting(self, key, default=None):
         return self._settings.get_setting(key, default)
@@ -1475,94 +1545,34 @@ class Plugin:
             screenshot_path = f"{self._screenshotPath}/{app_name}_{timestamp}.png"
             logger.debug(f"Screenshot path: {screenshot_path}")
 
-            # Prepare environment
+            # Base env: real env, then borrow XDG_CURRENT_DESKTOP/DBUS/WAYLAND from a graphical process.
+            # The pipewire branch layers gstreamer overrides on top.
+            uid = os.getuid()
+            xdg_runtime = f"/run/user/{uid}"
             env = os.environ.copy()
-            env.update({
-                "XDG_RUNTIME_DIR": "/run/user/1000",
-                "XDG_SESSION_TYPE": "wayland",
-                "HOME": DECKY_HOME
-            })
+            if self._session_env is None:
+                self._session_env = self._load_session_env()
+                logger.info(f"Session env borrowed: XDG_CURRENT_DESKTOP={self._session_env.get('XDG_CURRENT_DESKTOP', '<unset>')}")
+            for k, v in self._session_env.items():
+                env.setdefault(k, v)
+            env.setdefault("XDG_RUNTIME_DIR", xdg_runtime)
+            env.setdefault("DBUS_SESSION_BUS_ADDRESS", f"unix:path={xdg_runtime}/bus")
+            env.setdefault("WAYLAND_DISPLAY", "wayland-0")
+            env.setdefault("HOME", DECKY_HOME)
 
-            # GStreamer pipeline: grab a few frames then EOS
-            # Using num-buffers=5 to skip potentially invalid first frames from PipeWire
-            cmd = (
-                f"GST_PLUGIN_PATH={GSTPLUGINSPATH} "
-                f"LD_LIBRARY_PATH={DEPSPATH} "
-                f"gst-launch-1.0 -e "
-                f"pipewiresrc do-timestamp=true num-buffers=5 ! "
-                f"videoconvert ! "
-                f"pngenc snapshot=true ! "
-                f"filesink location=\"{screenshot_path}\""
-            )
-            logger.debug(f"GStreamer command: {cmd}")
+            if self._capture_backend is None:
+                self._capture_backend = await self._select_capture_backend(env)
 
-            for attempt in range(1, MAX_ATTEMPTS + 1):
-                if attempt > 1:
-                    await asyncio.sleep(0.3)
-                    logger.info(f"Retrying screenshot capture (attempt {attempt}/{MAX_ATTEMPTS})")
+            if self._capture_backend == "pipewire":
+                return await self._take_screenshot_pipewire(env, screenshot_path, MIN_VALID_SIZE, MAX_ATTEMPTS)
 
-                if os.path.exists(screenshot_path):
-                    try:
-                        os.remove(screenshot_path)
-                    except OSError as e:
-                        logger.warning(f"Could not remove stale screenshot file: {e}")
+            if self._capture_backend == "spectacle":
+                return await self._take_screenshot_spectacle(env, screenshot_path, MIN_VALID_SIZE)
 
-                proc = await asyncio.create_subprocess_exec(
-                    'gst-launch-1.0',
-                    '-e',
-                    'pipewiresrc',
-                    'do-timestamp=true',
-                    'num-buffers=5',
-                    '!',
-                    'videoconvert',
-                    '!',
-                    'pngenc',
-                    'snapshot=true',
-                    '!',
-                    'filesink',
-                    f'location={screenshot_path}',
-                    stdout=PIPE,
-                    stderr=PIPE,
-                    env=env
-                )
+            if self._capture_backend == "portal":
+                return await self._take_screenshot_portal(env, screenshot_path, MIN_VALID_SIZE)
 
-                timed_out = False
-                try:
-                    out, err = await asyncio.wait_for(proc.communicate(), timeout=2.5)
-                except asyncio.TimeoutError:
-                    timed_out = True
-                    logger.warning(f"Attempt {attempt}: GStreamer timed out after 2.5s, sending SIGINT")
-                    proc.send_signal(signal.SIGINT)
-                    try:
-                        out, err = await asyncio.wait_for(proc.communicate(), timeout=1)
-                    except asyncio.TimeoutError:
-                        logger.error(f"Attempt {attempt}: GStreamer did not exit within 1s after SIGINT, killing process")
-                        proc.kill()
-                        out, err = await proc.communicate()
-
-                stderr_output = err.decode().strip()
-                if stderr_output:
-                    logger.debug(f"Attempt {attempt}: GStreamer stderr: {stderr_output}")
-                logger.debug(f"Attempt {attempt}: GStreamer return code: {proc.returncode} (timed_out={timed_out})")
-
-                if not os.path.exists(screenshot_path):
-                    logger.warning(f"Attempt {attempt}: screenshot file not created")
-                    continue
-
-                size = os.path.getsize(screenshot_path)
-                if size < MIN_VALID_SIZE:
-                    logger.warning(f"Attempt {attempt}: screenshot too small ({size} bytes, min {MIN_VALID_SIZE}) - likely corrupted frame")
-                    continue
-
-                base64_data = get_base64_image(screenshot_path)
-                if not base64_data:
-                    logger.warning(f"Attempt {attempt}: base64 encoding failed for {screenshot_path}")
-                    continue
-
-                logger.debug(f"Screenshot saved ({size} bytes) on attempt {attempt}")
-                return {"path": screenshot_path, "base64": base64_data}
-
-            logger.error(f"Screenshot capture failed after {MAX_ATTEMPTS} attempts")
+            logger.error("No capture backend available for this session")
             return {"path": "", "base64": ""}
 
         except Exception as e:
@@ -1572,6 +1582,210 @@ class Plugin:
 
         finally:
             _processing_lock = False
+
+    async def _take_screenshot_pipewire(self, env, screenshot_path, MIN_VALID_SIZE, MAX_ATTEMPTS):
+        env = dict(env)
+        env["XDG_SESSION_TYPE"] = "wayland"
+
+        # GStreamer pipeline: grab a few frames then EOS
+        # Using num-buffers=5 to skip potentially invalid first frames from PipeWire
+        cmd = (
+            f"GST_PLUGIN_PATH={GSTPLUGINSPATH} "
+            f"LD_LIBRARY_PATH={DEPSPATH} "
+            f"gst-launch-1.0 -e "
+            f"pipewiresrc do-timestamp=true num-buffers=5 ! "
+            f"videoconvert ! "
+            f"pngenc snapshot=true ! "
+            f"filesink location=\"{screenshot_path}\""
+        )
+        logger.debug(f"GStreamer command: {cmd}")
+
+        for attempt in range(1, MAX_ATTEMPTS + 1):
+            if attempt > 1:
+                await asyncio.sleep(0.3)
+                logger.info(f"Retrying screenshot capture (attempt {attempt}/{MAX_ATTEMPTS})")
+
+            if os.path.exists(screenshot_path):
+                try:
+                    os.remove(screenshot_path)
+                except OSError as e:
+                    logger.warning(f"Could not remove stale screenshot file: {e}")
+
+            proc = await asyncio.create_subprocess_exec(
+                'gst-launch-1.0',
+                '-e',
+                'pipewiresrc',
+                'do-timestamp=true',
+                'num-buffers=5',
+                '!',
+                'videoconvert',
+                '!',
+                'pngenc',
+                'snapshot=true',
+                '!',
+                'filesink',
+                f'location={screenshot_path}',
+                stdout=PIPE,
+                stderr=PIPE,
+                env=env
+            )
+
+            timed_out = False
+            try:
+                out, err = await asyncio.wait_for(proc.communicate(), timeout=2.5)
+            except asyncio.TimeoutError:
+                timed_out = True
+                logger.warning(f"Attempt {attempt}: GStreamer timed out after 2.5s, sending SIGINT")
+                proc.send_signal(signal.SIGINT)
+                try:
+                    out, err = await asyncio.wait_for(proc.communicate(), timeout=1)
+                except asyncio.TimeoutError:
+                    logger.error(f"Attempt {attempt}: GStreamer did not exit within 1s after SIGINT, killing process")
+                    proc.kill()
+                    out, err = await proc.communicate()
+
+            stderr_output = err.decode().strip()
+            if stderr_output:
+                logger.debug(f"Attempt {attempt}: GStreamer stderr: {stderr_output}")
+            logger.debug(f"Attempt {attempt}: GStreamer return code: {proc.returncode} (timed_out={timed_out})")
+
+            if not os.path.exists(screenshot_path):
+                logger.warning(f"Attempt {attempt}: screenshot file not created")
+                continue
+
+            size = os.path.getsize(screenshot_path)
+            if size < MIN_VALID_SIZE:
+                logger.warning(f"Attempt {attempt}: screenshot too small ({size} bytes, min {MIN_VALID_SIZE}) - likely corrupted frame")
+                continue
+
+            base64_data = get_base64_image(screenshot_path)
+            if not base64_data:
+                logger.warning(f"Attempt {attempt}: base64 encoding failed for {screenshot_path}")
+                continue
+
+            logger.debug(f"Screenshot saved ({size} bytes) on attempt {attempt}")
+            return {"path": screenshot_path, "base64": base64_data}
+
+        logger.error(f"Screenshot capture failed after {MAX_ATTEMPTS} attempts")
+        self._capture_backend = None
+        return {"path": "", "base64": ""}
+
+    async def _take_screenshot_spectacle(self, env, screenshot_path, MIN_VALID_SIZE):
+        # PyInstaller injects LD_LIBRARY_PATH=/tmp/_MEIxxx/ which has older libs that break Qt-linked binaries.
+        env = self._clean_system_binary_env(env)
+        proc = await asyncio.create_subprocess_exec(
+            '/usr/bin/spectacle', '-b', '-n', '-f', '-o', screenshot_path,
+            stdout=PIPE, stderr=PIPE, env=env
+        )
+        try:
+            _, err = await asyncio.wait_for(proc.communicate(), timeout=5.0)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.communicate()
+            logger.error("spectacle timed out after 5s")
+            self._capture_backend = None
+            return {"path": "", "base64": ""}
+
+        if proc.returncode != 0 or not os.path.exists(screenshot_path):
+            logger.error(f"spectacle failed: rc={proc.returncode} stderr={err.decode(errors='ignore').strip()}")
+            self._capture_backend = None
+            return {"path": "", "base64": ""}
+
+        size = os.path.getsize(screenshot_path)
+        if size < MIN_VALID_SIZE:
+            logger.warning(f"spectacle screenshot too small ({size} bytes, min {MIN_VALID_SIZE})")
+            self._capture_backend = None
+            return {"path": "", "base64": ""}
+
+        base64_data = get_base64_image(screenshot_path)
+        if not base64_data:
+            logger.warning(f"spectacle base64 encoding failed for {screenshot_path}")
+            return {"path": "", "base64": ""}
+
+        logger.debug(f"Screenshot saved via spectacle ({size} bytes)")
+        return {"path": screenshot_path, "base64": base64_data}
+
+    async def _take_screenshot_portal(self, env, screenshot_path, MIN_VALID_SIZE):
+        # Result arrives as a Request.Response signal; start gdbus monitor before issuing the call to avoid a race.
+        env = self._clean_system_binary_env(env)
+        handle_token = f"deckytr_{int(time.time() * 1000)}"
+
+        # stdbuf -oL: gdbus block-buffers when stdout is a pipe, so the Response signal stays unread until exit.
+        monitor = await asyncio.create_subprocess_exec(
+            '/usr/bin/stdbuf', '-oL',
+            '/usr/bin/gdbus', 'monitor', '--session',
+            '--dest', 'org.freedesktop.portal.Desktop',
+            stdout=PIPE, stderr=PIPE, env=env
+        )
+
+        try:
+            options = f"{{'interactive': <false>, 'modal': <false>, 'handle_token': <'{handle_token}'>}}"
+            call = await asyncio.create_subprocess_exec(
+                '/usr/bin/gdbus', 'call', '--session',
+                '--dest', 'org.freedesktop.portal.Desktop',
+                '--object-path', '/org/freedesktop/portal/desktop',
+                '--method', 'org.freedesktop.portal.Screenshot.Screenshot',
+                '', options,
+                stdout=PIPE, stderr=PIPE, env=env
+            )
+            _, call_err = await asyncio.wait_for(call.communicate(), timeout=3.0)
+            if call.returncode != 0:
+                logger.error(f"portal Screenshot call failed: {call_err.decode(errors='ignore').strip()}")
+                self._capture_backend = None
+                return {"path": "", "base64": ""}
+
+            uri = None
+            deadline = asyncio.get_event_loop().time() + 8.0
+            while True:
+                remaining = deadline - asyncio.get_event_loop().time()
+                if remaining <= 0:
+                    break
+                try:
+                    line = await asyncio.wait_for(monitor.stdout.readline(), timeout=remaining)
+                except asyncio.TimeoutError:
+                    break
+                if not line:
+                    break
+                s = line.decode(errors='ignore')
+                if handle_token not in s or "Response" not in s:
+                    continue
+                m = re.search(r"'uri':\s*<'(file://[^']+)'>", s)
+                if m:
+                    uri = m.group(1)
+                    break
+
+            if not uri:
+                logger.error("portal Screenshot timed out waiting for Response signal")
+                self._capture_backend = None
+                return {"path": "", "base64": ""}
+
+            src = unquote(urlparse(uri).path)
+            shutil.copyfile(src, screenshot_path)
+            try:
+                os.remove(src)
+            except OSError:
+                pass
+
+            size = os.path.getsize(screenshot_path)
+            if size < MIN_VALID_SIZE:
+                logger.warning(f"portal screenshot too small ({size} bytes, min {MIN_VALID_SIZE})")
+                self._capture_backend = None
+                return {"path": "", "base64": ""}
+
+            base64_data = get_base64_image(screenshot_path)
+            if not base64_data:
+                logger.warning(f"portal base64 encoding failed for {screenshot_path}")
+                return {"path": "", "base64": ""}
+
+            logger.debug(f"Screenshot saved via portal ({size} bytes)")
+            return {"path": screenshot_path, "base64": base64_data}
+
+        finally:
+            try:
+                monitor.kill()
+                await monitor.communicate()
+            except Exception:
+                pass
 
     async def saveConfig(self):
         try:
