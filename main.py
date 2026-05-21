@@ -1178,11 +1178,13 @@ class Plugin:
     _gemini_api_key: str = ""
     _gemini_model: str = "gemini-2.5-flash"
 
-    _capture_backend = None  # "pipewire" | "spectacle" | "portal" | None; chosen lazily per session
-    _session_env = None  # session env (XDG_CURRENT_DESKTOP, DBUS, WAYLAND...) borrowed from a user-owned graphical process
+    _has_pngenc = None
+    _fallback_dims = None
+    _capture_backend = None  # "pipewire" | "spectacle" | "portal" | None
+    _session_env = None  # session env (XDG_CURRENT_DESKTOP, DBUS, WAYLAND...)
 
     def _load_session_env(self):
-        # plugin_loader.service starts at boot with no graphical env, so borrow one from a running desktop process.
+        # plugin_loader.service starts at boot with no graphical env
         uid = os.getuid()
         desktop_comms = {'plasmashell', 'kwin_wayland', 'kwin_x11', 'gnome-shell', 'sway', 'Hyprland'}
         for proc_path in glob.glob('/proc/[0-9]*'):
@@ -1207,7 +1209,6 @@ class Plugin:
         return {}
 
     def _clean_system_binary_env(self, env):
-        # Strip PyInstaller bootloader paths so system binaries link against the system libs, not the frozen ones.
         clean = dict(env)
         for k in ("LD_LIBRARY_PATH", "LD_PRELOAD", "PYTHONHOME", "PYTHONPATH", "_MEIPASS", "_MEIPASS2"):
             clean.pop(k, None)
@@ -1217,7 +1218,6 @@ class Plugin:
         return clean
 
     async def _select_capture_backend(self, env):
-        # pipewiresrc needs a Video/Source node; gamescope publishes one in Game Mode, KDE desktop mode does not.
         has_video_source = False
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -1244,6 +1244,35 @@ class Plugin:
 
         logger.info(f"Capture backend: {backend}")
         return backend
+
+    async def _probe_fallback_dims(self, env):
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                '/usr/bin/pw-dump', stdout=PIPE, stderr=PIPE, env=env
+            )
+            out, _ = await asyncio.wait_for(proc.communicate(), timeout=2.0)
+            nodes = json.loads(out)
+            gamescope_dims = None
+            first_dims = None
+            for n in nodes:
+                info = n.get('info') or {}
+                props = info.get('props') or {}
+                if props.get('media.class') != 'Video/Source':
+                    continue
+                for fmt in (info.get('params') or {}).get('EnumFormat', []):
+                    sz = fmt.get('size') or {}
+                    w, h = sz.get('width'), sz.get('height')
+                    if not (w and h):
+                        continue
+                    if props.get('node.name') == 'gamescope':
+                        gamescope_dims = (w, h)
+                    if first_dims is None:
+                        first_dims = (w, h)
+                    break
+            return gamescope_dims or first_dims
+        except Exception as e:
+            logger.warning(f"pw-dump dimension probe failed: {e}")
+            return None
 
     # Generic settings handlers
     async def get_setting(self, key, default=None):
@@ -1530,6 +1559,9 @@ class Plugin:
         MIN_VALID_SIZE = 30_000
         MAX_ATTEMPTS = 3
 
+        FALLBACK_NUM_BUFFERS = 1
+        FALLBACK_STDDEV_THRESHOLD = 10
+
         try:
             _processing_lock = True
 
@@ -1545,8 +1577,6 @@ class Plugin:
             screenshot_path = f"{self._screenshotPath}/{app_name}_{timestamp}.png"
             logger.debug(f"Screenshot path: {screenshot_path}")
 
-            # Base env: real env, then borrow XDG_CURRENT_DESKTOP/DBUS/WAYLAND from a graphical process.
-            # The pipewire branch layers gstreamer overrides on top.
             uid = os.getuid()
             xdg_runtime = f"/run/user/{uid}"
             env = os.environ.copy()
@@ -1564,7 +1594,10 @@ class Plugin:
                 self._capture_backend = await self._select_capture_backend(env)
 
             if self._capture_backend == "pipewire":
-                return await self._take_screenshot_pipewire(env, screenshot_path, MIN_VALID_SIZE, MAX_ATTEMPTS)
+                return await self._take_screenshot_pipewire(
+                    env, screenshot_path,
+                    MIN_VALID_SIZE, MAX_ATTEMPTS, FALLBACK_NUM_BUFFERS, FALLBACK_STDDEV_THRESHOLD,
+                )
 
             if self._capture_backend == "spectacle":
                 return await self._take_screenshot_spectacle(env, screenshot_path, MIN_VALID_SIZE)
@@ -1583,21 +1616,55 @@ class Plugin:
         finally:
             _processing_lock = False
 
-    async def _take_screenshot_pipewire(self, env, screenshot_path, MIN_VALID_SIZE, MAX_ATTEMPTS):
+    async def _take_screenshot_pipewire(self, env, screenshot_path, MIN_VALID_SIZE, MAX_ATTEMPTS, FALLBACK_NUM_BUFFERS, FALLBACK_STDDEV_THRESHOLD):
         env = dict(env)
-        env["XDG_SESSION_TYPE"] = "wayland"
+        env.update({
+            "XDG_SESSION_TYPE": "wayland",
+            "GST_PLUGIN_PATH": str(GSTPLUGINSPATH),
+            "LD_LIBRARY_PATH": str(DEPSPATH),
+        })
 
-        # GStreamer pipeline: grab a few frames then EOS
-        # Using num-buffers=5 to skip potentially invalid first frames from PipeWire
-        cmd = (
-            f"GST_PLUGIN_PATH={GSTPLUGINSPATH} "
-            f"LD_LIBRARY_PATH={DEPSPATH} "
-            f"gst-launch-1.0 -e "
-            f"pipewiresrc do-timestamp=true num-buffers=5 ! "
-            f"videoconvert ! "
-            f"pngenc snapshot=true ! "
-            f"filesink location=\"{screenshot_path}\""
-        )
+        # Pngenc probing
+        if self._has_pngenc is None:
+            try:
+                probe = await asyncio.create_subprocess_exec(
+                    '/usr/bin/gst-inspect-1.0', '--exists', 'pngenc',
+                    stdout=PIPE, stderr=PIPE
+                )
+                await asyncio.wait_for(probe.communicate(), timeout=2.0)
+                self._has_pngenc = (probe.returncode == 0)
+            except Exception as e:
+                logger.warning(f"pngenc probe failed ({e}); using Pillow fallback")
+                self._has_pngenc = False
+            logger.info(f"GStreamer pngenc available: {self._has_pngenc}")
+
+        if not self._has_pngenc:
+            if self._fallback_dims is None:
+                self._fallback_dims = await self._probe_fallback_dims(env)
+                logger.info(f"Fallback capture dims: {self._fallback_dims}")
+            if self._fallback_dims is None:
+                logger.error("Cannot run Pillow fallback: pw-dump did not return a Video/Source resolution")
+                return {"path": "", "base64": ""}
+
+        if self._has_pngenc:
+            cmd = (
+                f"GST_PLUGIN_PATH={GSTPLUGINSPATH} "
+                f"LD_LIBRARY_PATH={DEPSPATH} "
+                f"gst-launch-1.0 -e "
+                f"pipewiresrc do-timestamp=true num-buffers=5 ! "
+                f"videoconvert ! "
+                f"pngenc snapshot=true ! "
+                f"filesink location=\"{screenshot_path}\""
+            )
+        else:
+            cmd = (
+                f"GST_PLUGIN_PATH={GSTPLUGINSPATH} "
+                f"LD_LIBRARY_PATH={DEPSPATH} "
+                f"gst-launch-1.0 -q -e "
+                f"pipewiresrc do-timestamp=true num-buffers={FALLBACK_NUM_BUFFERS} ! "
+                f"videoconvert ! video/x-raw,format=RGB ! "
+                f"fdsink fd=1"
+            )
         logger.debug(f"GStreamer command: {cmd}")
 
         for attempt in range(1, MAX_ATTEMPTS + 1):
@@ -1605,30 +1672,50 @@ class Plugin:
                 await asyncio.sleep(0.3)
                 logger.info(f"Retrying screenshot capture (attempt {attempt}/{MAX_ATTEMPTS})")
 
-            if os.path.exists(screenshot_path):
+            if self._has_pngenc and os.path.exists(screenshot_path):
                 try:
                     os.remove(screenshot_path)
                 except OSError as e:
                     logger.warning(f"Could not remove stale screenshot file: {e}")
 
-            proc = await asyncio.create_subprocess_exec(
-                'gst-launch-1.0',
-                '-e',
-                'pipewiresrc',
-                'do-timestamp=true',
-                'num-buffers=5',
-                '!',
-                'videoconvert',
-                '!',
-                'pngenc',
-                'snapshot=true',
-                '!',
-                'filesink',
-                f'location={screenshot_path}',
-                stdout=PIPE,
-                stderr=PIPE,
-                env=env
-            )
+            if self._has_pngenc:
+                proc = await asyncio.create_subprocess_exec(
+                    'gst-launch-1.0',
+                    '-e',
+                    'pipewiresrc',
+                    'do-timestamp=true',
+                    'num-buffers=5',
+                    '!',
+                    'videoconvert',
+                    '!',
+                    'pngenc',
+                    'snapshot=true',
+                    '!',
+                    'filesink',
+                    f'location={screenshot_path}',
+                    stdout=PIPE,
+                    stderr=PIPE,
+                    env=env
+                )
+            else:
+                proc = await asyncio.create_subprocess_exec(
+                    'gst-launch-1.0',
+                    '-q',
+                    '-e',
+                    'pipewiresrc',
+                    'do-timestamp=true',
+                    f'num-buffers={FALLBACK_NUM_BUFFERS}',
+                    '!',
+                    'videoconvert',
+                    '!',
+                    'video/x-raw,format=RGB',
+                    '!',
+                    'fdsink',
+                    'fd=1',
+                    stdout=PIPE,
+                    stderr=PIPE,
+                    env=env
+                )
 
             timed_out = False
             try:
@@ -1649,22 +1736,56 @@ class Plugin:
                 logger.debug(f"Attempt {attempt}: GStreamer stderr: {stderr_output}")
             logger.debug(f"Attempt {attempt}: GStreamer return code: {proc.returncode} (timed_out={timed_out})")
 
-            if not os.path.exists(screenshot_path):
-                logger.warning(f"Attempt {attempt}: screenshot file not created")
-                continue
+            if self._has_pngenc:
+                if not os.path.exists(screenshot_path):
+                    logger.warning(f"Attempt {attempt}: screenshot file not created")
+                    continue
 
-            size = os.path.getsize(screenshot_path)
-            if size < MIN_VALID_SIZE:
-                logger.warning(f"Attempt {attempt}: screenshot too small ({size} bytes, min {MIN_VALID_SIZE}) - likely corrupted frame")
-                continue
+                size = os.path.getsize(screenshot_path)
+                if size < MIN_VALID_SIZE:
+                    logger.warning(f"Attempt {attempt}: screenshot too small ({size} bytes, min {MIN_VALID_SIZE}) - likely corrupted frame")
+                    continue
 
-            base64_data = get_base64_image(screenshot_path)
-            if not base64_data:
-                logger.warning(f"Attempt {attempt}: base64 encoding failed for {screenshot_path}")
-                continue
+                base64_data = get_base64_image(screenshot_path)
+                if not base64_data:
+                    logger.warning(f"Attempt {attempt}: base64 encoding failed for {screenshot_path}")
+                    continue
 
-            logger.debug(f"Screenshot saved ({size} bytes) on attempt {attempt}")
-            return {"path": screenshot_path, "base64": base64_data}
+                logger.debug(f"Screenshot saved ({size} bytes) on attempt {attempt}")
+                return {"path": screenshot_path, "base64": base64_data}
+            else:
+                fw, fh = self._fallback_dims
+                expected_bytes = fw * fh * 3
+                if len(out) != expected_bytes:
+                    # Source resolution changed (may be dock/undock) - invalidate cache
+                    logger.warning(f"Attempt {attempt}: raw size {len(out)} != expected {expected_bytes} for {fw}x{fh}; re-probing dims next call")
+                    self._fallback_dims = None
+                    continue
+
+                frame = out
+
+                try:
+                    from PIL import Image, ImageStat
+                    from io import BytesIO
+                    img = Image.frombytes("RGB", (fw, fh), frame)
+                except Exception as e:
+                    logger.warning(f"Attempt {attempt}: Pillow decode failed: {e}")
+                    continue
+
+                if max(ImageStat.Stat(img).stddev) < FALLBACK_STDDEV_THRESHOLD:
+                    logger.warning(f"Attempt {attempt}: frame too uniform (stddev < {FALLBACK_STDDEV_THRESHOLD}) - likely warmup garbage")
+                    continue
+
+                buf = BytesIO()
+                img.save(buf, "PNG", optimize=False)
+                png_bytes = buf.getvalue()
+
+                with open(screenshot_path, "wb") as f:
+                    f.write(png_bytes)
+                base64_data = base64.b64encode(png_bytes).decode("utf-8")
+
+                logger.debug(f"Screenshot saved via Pillow ({len(png_bytes)} bytes) on attempt {attempt}")
+                return {"path": screenshot_path, "base64": base64_data}
 
         logger.error(f"Screenshot capture failed after {MAX_ATTEMPTS} attempts")
         self._capture_backend = None
