@@ -247,10 +247,8 @@ class HidrawButtonMonitor:
         'START': 0x00004000,
         'L5': 0x00008000,
         'R5': 0x00010000,
-        'LEFT_PAD_TOUCH': 0x00020000,
-        'RIGHT_PAD_TOUCH': 0x00040000,
-        'LEFT_PAD_CLICK': 0x00080000,
-        'RIGHT_PAD_CLICK': 0x00100000,
+        'LEFT_PAD_TOUCH': 0x00080000,
+        'RIGHT_PAD_TOUCH': 0x00100000,
         'L3': 0x00400000,
         'R3': 0x04000000,
     }
@@ -306,8 +304,8 @@ class HidrawButtonMonitor:
                             other_valve_candidates.append((i, path))
                             logger.debug(f"Found InputPlumber virtual controller candidate at {path}")
                         else:
-                            other_valve_candidates.append((i, path))
-                            logger.debug(f"Found Valve device candidate at {path}")
+                            # Valve devices use non-standard HID protocols - let evdev handle them
+                            logger.debug(f"Skipping unsupported Valve hidraw at {path}")
                 except Exception as e:
                     logger.debug(f"Cannot read uevent for hidraw{i}: {e}")
 
@@ -372,7 +370,7 @@ class HidrawButtonMonitor:
             self.device_pid = self.INPUTPLUMBER_PID
             return path
 
-        logger.warning("No Valve-compatible controller hidraw device found")
+        logger.info("No supported Valve hidraw device found; relying on evdev only")
         return None
 
     def send_feature_report(self, data):
@@ -616,6 +614,204 @@ class HidrawButtonMonitor:
             }
 
 
+class TritonHidrawMonitor:
+    VALVE_VID = 0x28DE
+    PROTEUS_PID = 0x1304
+    NEREID_PID = 0x1305
+    REPORT_ID_INPUT = 0x42
+    PACKET_SIZE = 64
+
+    BUTTONS = {
+        0x00000020: 'R3',
+        0x00000080: 'R4',
+        0x00000100: 'R5',
+        0x00008000: 'L3',
+        0x00020000: 'L4',
+        0x00040000: 'L5',
+        0x00200000: 'RIGHT_PAD_TOUCH',
+        0x02000000: 'LEFT_PAD_TOUCH',
+    }
+
+    def __init__(self):
+        self.device_fds = []
+        self.device_paths = []
+        self.running = False
+        self.thread = None
+        self.event_queue = queue.Queue(maxsize=100)
+        self.current_buttons = set()
+        self.last_buttons = 0
+        self.error_count = 0
+        self.initialized = False
+        self.lock = threading.Lock()
+        logger.debug("TritonHidrawMonitor initialized")
+
+    def find_devices(self):
+        found = []
+        for i in range(16):
+            path = f'/dev/hidraw{i}'
+            if not os.path.exists(path):
+                continue
+            try:
+                with open(f'/sys/class/hidraw/hidraw{i}/device/uevent') as f:
+                    content = f.read().upper()
+                if '28DE' not in content:
+                    continue
+                if '1304' in content or '1305' in content:
+                    found.append(path)
+                    logger.debug(f"Found Triton hidraw candidate at {path}")
+            except Exception as e:
+                logger.debug(f"Cannot read uevent for hidraw{i}: {e}")
+        return found
+
+    def initialize_device(self):
+        self.device_paths = self.find_devices()
+        if not self.device_paths:
+            return False
+        for path in self.device_paths:
+            try:
+                fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+                self.device_fds.append(fd)
+                logger.info(f"Opened {path} for Triton hidraw monitoring (read-only)")
+            except Exception as e:
+                logger.debug(f"Could not open {path}: {e}")
+        if not self.device_fds:
+            self.device_paths = []
+            return False
+        self.initialized = True
+        return True
+
+    def start(self):
+        if self.running:
+            return True
+        if not self.initialize_device():
+            logger.info("No Triton dongle present; TritonHidrawMonitor not started")
+            return False
+        self.running = True
+        self.thread = threading.Thread(target=self._monitor_loop, daemon=True)
+        self.thread.start()
+        logger.info("TritonHidrawMonitor started")
+        return True
+
+    def stop(self):
+        self.running = False
+        if self.thread is not None:
+            self.thread.join(timeout=2.0)
+            self.thread = None
+        self._close_devices()
+        self.initialized = False
+        logger.info("TritonHidrawMonitor stopped")
+
+    def _close_devices(self):
+        for fd in self.device_fds:
+            try:
+                os.close(fd)
+            except Exception:
+                pass
+        self.device_fds = []
+        self.device_paths = []
+
+    def _monitor_loop(self):
+        logger.info("TritonHidrawMonitor loop started")
+        reconnect_delay = 2.0
+        max_errors = 10
+
+        while self.running:
+            try:
+                if not self.initialized or not self.device_fds:
+                    if not self.initialize_device():
+                        time.sleep(reconnect_delay)
+                        continue
+
+                r, _, _ = select.select(self.device_fds, [], [], 0.1)
+                if not r:
+                    continue
+
+                for fd in r:
+                    try:
+                        data = os.read(fd, self.PACKET_SIZE)
+                    except OSError as e:
+                        self.error_count += 1
+                        logger.warning(f"Triton hidraw read error ({self.error_count}): {e}")
+                        if self.error_count >= max_errors:
+                            logger.error("Too many Triton read errors, reconnecting")
+                            self._close_devices()
+                            self.initialized = False
+                            time.sleep(reconnect_delay)
+                        break
+
+                    if len(data) >= 6 and data[0] == self.REPORT_ID_INPUT:
+                        self._process_packet(data)
+                        self.error_count = 0
+
+            except Exception as e:
+                logger.error(f"Unexpected error in Triton monitor loop: {e}")
+                self.error_count += 1
+                time.sleep(0.1)
+
+        logger.info("TritonHidrawMonitor loop ended")
+
+    def _process_packet(self, data):
+        buttons = struct.unpack('<I', data[2:6])[0]
+        if buttons == self.last_buttons:
+            return
+
+        timestamp = time.time()
+        new_buttons = set()
+        for mask, name in self.BUTTONS.items():
+            if buttons & mask:
+                new_buttons.add(name)
+
+        with self.lock:
+            for button in self.current_buttons - new_buttons:
+                event = {"button": button, "pressed": False, "timestamp": timestamp}
+                try:
+                    self.event_queue.put_nowait(event)
+                except queue.Full:
+                    try:
+                        self.event_queue.get_nowait()
+                        self.event_queue.put_nowait(event)
+                    except Exception:
+                        pass
+            for button in new_buttons - self.current_buttons:
+                event = {"button": button, "pressed": True, "timestamp": timestamp}
+                try:
+                    self.event_queue.put_nowait(event)
+                except queue.Full:
+                    try:
+                        self.event_queue.get_nowait()
+                        self.event_queue.put_nowait(event)
+                    except Exception:
+                        pass
+            self.current_buttons = new_buttons
+
+        self.last_buttons = buttons
+
+    def get_events(self, max_events=10):
+        events = []
+        with self.lock:
+            for _ in range(max_events):
+                try:
+                    events.append(self.event_queue.get_nowait())
+                except queue.Empty:
+                    break
+        return events
+
+    def get_button_state(self):
+        with self.lock:
+            return list(self.current_buttons)
+
+    def get_status(self):
+        with self.lock:
+            return {
+                "running": self.running,
+                "initialized": self.initialized,
+                "device_paths": list(self.device_paths),
+                "error_count": self.error_count,
+                "queue_size": self.event_queue.qsize(),
+                "current_buttons": list(self.current_buttons),
+                "last_buttons": hex(self.last_buttons),
+            }
+
 for _p in [ROOT_PY_MODULES_DIR, BIN_PY_MODULES_DIR]:
     if os.path.exists(_p):
         if _p in sys.path:
@@ -658,8 +854,6 @@ class EvdevGamepadMonitor:
         318: 'R3',      # BTN_THUMBR
     }
 
-    VALVE_VENDOR = 0x28de
-
     def __init__(self):
         self.running = False
         self.thread = None
@@ -673,12 +867,15 @@ class EvdevGamepadMonitor:
         logger.debug("EvdevGamepadMonitor initialized")
 
     def _is_gamepad(self, dev):
-        """Check if device has gamepad capabilities (EV_KEY + EV_ABS)."""
         try:
             caps = dev.capabilities(verbose=False)
-            has_keys = 1 in caps  # EV_KEY
-            has_abs = 3 in caps   # EV_ABS
-            return has_keys and has_abs
+            keys = set(caps.get(evdev.ecodes.EV_KEY, []))
+            return bool(keys & {
+                evdev.ecodes.BTN_SOUTH,
+                evdev.ecodes.BTN_EAST,
+                evdev.ecodes.BTN_NORTH,
+                evdev.ecodes.BTN_WEST,
+            })
         except Exception:
             return False
 
@@ -700,18 +897,6 @@ class EvdevGamepadMonitor:
                 try:
                     dev = evdev.InputDevice(path)
                 except Exception:
-                    self._rejected_paths.add(path)
-                    continue
-
-                # Skip virtual devices (empty phys)
-                if not dev.phys:
-                    dev.close()
-                    self._rejected_paths.add(path)
-                    continue
-
-                # Skip Valve controllers
-                if dev.info.vendor == self.VALVE_VENDOR:
-                    dev.close()
                     self._rejected_paths.add(path)
                     continue
 
@@ -976,6 +1161,7 @@ class Plugin:
     # Hidraw button monitor
     _hidraw_monitor: HidrawButtonMonitor = None
     _evdev_monitor: EvdevGamepadMonitor = None
+    _triton_monitor: TritonHidrawMonitor = None
 
     # Provider system
     _provider_manager: ProviderManager = None
@@ -1796,6 +1982,11 @@ class Plugin:
                 if not self._evdev_monitor.running:
                     self._evdev_monitor.start()
 
+            if self._triton_monitor is None:
+                self._triton_monitor = TritonHidrawMonitor()
+            if not self._triton_monitor.running:
+                self._triton_monitor.start()
+
             if hidraw_ok:
                 return {"success": True, "message": "Monitor started"}
             else:
@@ -1810,6 +2001,8 @@ class Plugin:
                 self._hidraw_monitor.stop()
             if self._evdev_monitor:
                 self._evdev_monitor.stop()
+            if self._triton_monitor:
+                self._triton_monitor.stop()
             return {"success": True, "message": "Monitor stopped"}
         except Exception as e:
             logger.error(f"Error stopping hidraw monitor: {e}")
@@ -1844,6 +2037,10 @@ class Plugin:
                 any_running = True
                 buttons.update(self._evdev_monitor.get_button_state())
 
+            if self._triton_monitor and self._triton_monitor.running:
+                any_running = True
+                buttons.update(self._triton_monitor.get_button_state())
+
             if any_running:
                 return {"success": True, "buttons": list(buttons)}
             return {"success": False, "buttons": [], "error": "Monitor not running"}
@@ -1864,6 +2061,11 @@ class Plugin:
                 status["evdev"] = self._evdev_monitor.get_status()
             else:
                 status["evdev"] = {"running": False, "available": EVDEV_AVAILABLE}
+
+            if self._triton_monitor:
+                status["triton"] = self._triton_monitor.get_status()
+            else:
+                status["triton"] = {"running": False, "initialized": False}
 
             return {"success": True, "status": status}
         except Exception as e:
@@ -2169,6 +2371,12 @@ class Plugin:
             else:
                 logger.info("evdev not available, external gamepad support disabled")
 
+            self._triton_monitor = TritonHidrawMonitor()
+            if self._triton_monitor.start():
+                logger.info("Triton hidraw monitor started")
+            else:
+                logger.info("Triton hidraw monitor not started")
+
         except Exception as e:
             logger.error(f"Error during initialization: {e}")
             logger.error(traceback.format_exc())
@@ -2183,6 +2391,10 @@ class Plugin:
             if self._evdev_monitor:
                 self._evdev_monitor.stop()
                 self._evdev_monitor = None
+
+            if self._triton_monitor:
+                self._triton_monitor.stop()
+                self._triton_monitor = None
 
             if self._hidraw_monitor:
                 self._hidraw_monitor.stop()

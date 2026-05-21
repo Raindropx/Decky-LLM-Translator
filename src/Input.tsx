@@ -248,11 +248,11 @@ export class Input {
         }
 
         // Check for touchpad buttons (for TOUCHPAD_COMBO mode)
-        if (this.currentlyPressedButtons.has(Button.LEFT_TOUCHPAD_CLICK)) {
-            buttons.push(Button.LEFT_TOUCHPAD_CLICK);
+        if (this.currentlyPressedButtons.has(Button.LEFT_TOUCHPAD_TOUCH)) {
+            buttons.push(Button.LEFT_TOUCHPAD_TOUCH);
         }
-        if (this.currentlyPressedButtons.has(Button.RIGHT_TOUCHPAD_CLICK)) {
-            buttons.push(Button.RIGHT_TOUCHPAD_CLICK);
+        if (this.currentlyPressedButtons.has(Button.RIGHT_TOUCHPAD_TOUCH)) {
+            buttons.push(Button.RIGHT_TOUCHPAD_TOUCH);
         }
 
         // Only process if the button state actually changed
@@ -264,8 +264,8 @@ export class Input {
                 if (b === Button.R5) return 'R5';
                 if (b === Button.L3) return 'L3';
                 if (b === Button.R3) return 'R3';
-                if (b === Button.LEFT_TOUCHPAD_CLICK) return 'LPAD';
-                if (b === Button.RIGHT_TOUCHPAD_CLICK) return 'RPAD';
+                if (b === Button.LEFT_TOUCHPAD_TOUCH) return 'LPAD';
+                if (b === Button.RIGHT_TOUCHPAD_TOUCH) return 'RPAD';
                 return b.toString();
             }).join(',');
             logger.debug('Input', `Button state: buttons=[${buttonNames}]`);
@@ -506,8 +506,7 @@ export class Input {
                     rightButtonName = 'R3';
                     break;
                 case InputMode.TOUCHPAD_COMBO:
-                    // Right touchpad pressed but left touchpad not pressed
-                    rightOnlyPressed = buttons.includes(Button.RIGHT_TOUCHPAD_CLICK) && !buttons.includes(Button.LEFT_TOUCHPAD_CLICK);
+                    rightOnlyPressed = buttons.includes(Button.RIGHT_TOUCHPAD_TOUCH) && !buttons.includes(Button.LEFT_TOUCHPAD_TOUCH);
                     rightButtonName = 'RPAD';
                     break;
             }
@@ -583,9 +582,8 @@ export class Input {
                 break;
 
             case InputMode.TOUCHPAD_COMBO:
-                // Note: Steam Deck reports touchpad touches as CLICK events via hidraw
-                const leftTouchpadPressed = buttons.includes(Button.LEFT_TOUCHPAD_CLICK);
-                const rightTouchpadPressed = buttons.includes(Button.RIGHT_TOUCHPAD_CLICK);
+                const leftTouchpadPressed = buttons.includes(Button.LEFT_TOUCHPAD_TOUCH);
+                const rightTouchpadPressed = buttons.includes(Button.RIGHT_TOUCHPAD_TOUCH);
                 buttonPressed = leftTouchpadPressed && rightTouchpadPressed;
                 buttonName = 'LPAD+RPAD';
                 break;
