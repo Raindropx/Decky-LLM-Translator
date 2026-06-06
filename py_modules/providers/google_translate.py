@@ -17,7 +17,7 @@ class GoogleTranslateProvider(TranslationProvider):
 
     SUPPORTED_LANGUAGES = [
         'auto', 'en', 'ja', 'zh-CN', 'zh-TW', 'ko', 'de', 'fr', 'es', 'it',
-        'pt', 'ru', 'ar', 'nl', 'pl', 'tr', 'uk', 'hi', 'el', 'th', 'vi', 'fi', 'id', 'ro', 'bg', 'hr',
+        'pt', 'ru', 'ar', 'nl', 'no', 'pl', 'tr', 'uk', 'hi', 'el', 'th', 'vi', 'fi', 'id', 'ro', 'bg', 'hr',
         'cs', 'hu', 'sv', 'da'
     ]
 
