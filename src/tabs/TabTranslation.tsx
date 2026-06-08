@@ -485,6 +485,7 @@ export const TabTranslation: VFC<TabTranslationProps> = ({ scrollTarget, onScrol
             <PanelSection title="Languages">
                 <PanelSectionRow>
                     <DropdownItem
+                        layout="below"
                         label="Input Language"
                         description={isCT2
                             ? "Source language (auto-detect not available for offline translation)"
@@ -499,6 +500,7 @@ export const TabTranslation: VFC<TabTranslationProps> = ({ scrollTarget, onScrol
 
                 <PanelSectionRow>
                     <DropdownItem
+                        layout="below"
                         label="Output Language"
                         description="Target language for translation"
                         rgOptions={[...(settings.targetLanguage === '' ? [selectLanguageOption] : []), ...outputLanguageOptions]}

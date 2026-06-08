@@ -77,6 +77,7 @@ export const TabControls: VFC<TabControlsProps> = ({ inputDiagnostics }) => {
             <PanelSection title="Control">
                 <PanelSectionRow>
                     <DropdownItem
+                        layout="below"
                         label="Quick Translation Shortcut"
                         description="Select which buttons to hold to start translaton"
                         rgOptions={inputModeOptions}
@@ -178,6 +179,7 @@ export const TabControls: VFC<TabControlsProps> = ({ inputDiagnostics }) => {
 
                 <PanelSectionRow>
                     <DropdownItem
+                        layout="below"
                         label="Translated Text Alignment"
                         description="Choose alignment for translated text labels"
                         rgOptions={translatedTextAlignmentOptions}
@@ -189,6 +191,7 @@ export const TabControls: VFC<TabControlsProps> = ({ inputDiagnostics }) => {
                 <PanelSectionRow>
                     <DropdownItem
                         key={fontDropdownKey}
+                        layout="below"
                         label="Translated Text Font"
                         description={fontDescription}
                         rgOptions={fontOptions}
@@ -220,6 +223,7 @@ export const TabControls: VFC<TabControlsProps> = ({ inputDiagnostics }) => {
 
                 <PanelSectionRow>
                     <DropdownItem
+                        layout="below"
                         label="Translated Text Style"
                         description="Font weight and style for translated text"
                         rgOptions={[
