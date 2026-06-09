@@ -118,7 +118,7 @@ const ApiKeyModal: VFC<{
                     </DialogButton>
                     <DialogButton
                         onClick={() => {
-                            onSave(apiKey);
+                            onSave(apiKey.trim());
                             closeModal?.();
                         }}
                     >

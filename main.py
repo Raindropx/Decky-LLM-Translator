@@ -115,6 +115,15 @@ def _mask_for_log(key, value):
     return _mask_secret(value) if key in SENSITIVE_SETTING_KEYS else value
 
 
+_API_KEY_JUNK_RE = re.compile(r"[\s\u200b\u200c\u200d\u2060\ufeff]+")
+
+
+def _clean_api_key(value):
+    if not isinstance(value, str):
+        return value
+    return _API_KEY_JUNK_RE.sub("", value)
+
+
 _URL_KEY_RE = re.compile(r"\bkey=([A-Za-z0-9_\-]{16,})")
 
 
@@ -1060,10 +1069,11 @@ class SettingsManager:
         except Exception as e:
             logger.error(f"Failed to read settings: {str(e)}")
             logger.error(traceback.format_exc())
-            self.settings = {}
 
     def set_setting(self, key, value):
         try:
+            # re-read so manual edits to the file are not overwritten by stale memory
+            self.read()
             self.settings[key] = value
             os.makedirs(os.path.dirname(self.settings_path), exist_ok=True)
             with open(self.settings_path, 'w') as f:
@@ -1285,6 +1295,15 @@ class Plugin:
 
     async def set_setting(self, key, value):
         logger.debug(f"Setting {key} to: {_mask_for_log(key, value)}")
+        if key in SENSITIVE_SETTING_KEYS and isinstance(value, str):
+            cleaned = _clean_api_key(value)
+            if cleaned != value:
+                logger.warning(
+                    f"{key} contained whitespace or invisible characters, "
+                    f"cleaned (len {len(value)} -> {len(cleaned)})"
+                )
+            value = cleaned
+            logger.info(f"{key} set (len={len(value)})")
         try:
             if key == "target_language":
                 self._target_language = value
@@ -2169,7 +2188,7 @@ class Plugin:
             return {"error": "network_error", "message": str(e)}
         except ApiKeyError as e:
             logger.error(f"API key error during OCR: {e}")
-            return {"error": "api_key_error", "message": "Invalid API key"}
+            return {"error": "api_key_error", "message": str(e) or "Invalid API key"}
         except RateLimitError as e:
             logger.error(f"Rate limit during OCR: {e}")
             return {"error": "rate_limit_error", "message": str(e)}
@@ -2302,7 +2321,10 @@ class Plugin:
             return {"error": "network_error", "message": str(e)}
         except ApiKeyError as e:
             logger.error(f"API key error during translation: {e}")
-            return {"error": "api_key_error", "message": "Invalid API key"}
+            return {"error": "api_key_error", "message": str(e) or "Invalid API key"}
+        except RateLimitError as e:
+            logger.error(f"Rate limit during translation: {e}")
+            return {"error": "rate_limit_error", "message": str(e)}
         except Exception as e:
             logger.error(f"Translation error: {e}")
             logger.error(traceback.format_exc())
@@ -2668,12 +2690,25 @@ class Plugin:
 
             os.makedirs(self._screenshotPath, exist_ok=True)
 
-            google_api_key = self._settings.get_setting("google_api_key", "")
+            def load_api_key(name):
+                raw = self._settings.get_setting(name, "")
+                cleaned = _clean_api_key(raw)
+                if cleaned != raw:
+                    logger.warning(
+                        f"{name} contained whitespace or invisible characters, "
+                        f"cleaned (len {len(raw)} -> {len(cleaned)})"
+                    )
+                    self._settings.set_setting(name, cleaned)
+                if cleaned:
+                    logger.info(f"{name} loaded (len={len(cleaned)})")
+                return cleaned
+
+            google_api_key = load_api_key("google_api_key")
             if google_api_key:
                 self._google_vision_api_key = google_api_key
                 self._google_translate_api_key = google_api_key
 
-            gemini_api_key = self._settings.get_setting("gemini_api_key", "")
+            gemini_api_key = load_api_key("gemini_api_key")
             if gemini_api_key:
                 self._gemini_api_key = gemini_api_key
             self._gemini_model = self._settings.get_setting("gemini_model", "gemini-2.5-flash")
