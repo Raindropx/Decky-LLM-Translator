@@ -1224,12 +1224,12 @@ export const TabTranslation: VFC<TabTranslationProps> = ({ scrollTarget, onScrol
                 )}
 
                 {/* Invisible spacer to help with scroll when focusing last element */}
-                <PanelSectionRow>
+                {/* <PanelSectionRow>
                     <Focusable
                         style={{ height: "1px", opacity: 0 }}
                         onActivate={() => {}}
                     />
-                </PanelSectionRow>
+                </PanelSectionRow> */}
             </PanelSection>
         </div>
     );
