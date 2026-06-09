@@ -24,6 +24,7 @@ NLLB_LANG_MAP = {
     "ru": "rus_Cyrl",
     "ar": "arb_Arab",
     "nl": "nld_Latn",
+    "no": "nob_Latn",  # Norwegian Bokmål
     "pl": "pol_Latn",
     "tr": "tur_Latn",
     "uk": "ukr_Cyrl",

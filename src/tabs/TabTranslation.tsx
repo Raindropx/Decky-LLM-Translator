@@ -56,6 +56,7 @@ const languageOptions = [
     { label: "\ud83c\uddee\ud83c\uddf9 Italian", data: "it" },
     { label: "\ud83c\uddef\ud83c\uddf5 Japanese", data: "ja" },
     { label: "\ud83c\uddf0\ud83c\uddf7 Korean", data: "ko" },
+    { label: "\ud83c\uddf3\ud83c\uddf4 Norwegian", data: "no" },
     { label: "\ud83c\uddf5\ud83c\uddf1 Polish", data: "pl" },
     { label: "\ud83c\uddf5\ud83c\uddf9 Portuguese", data: "pt" },
     { label: "\ud83c\uddf7\ud83c\uddf4 Romanian", data: "ro" },
@@ -74,7 +75,7 @@ const outputLanguageOptions = languageOptions.filter(lang => lang.data !== "auto
 // Languages RapidOCR able to work with
 const rapidocrLanguages = new Set([
     'en', 'zh-CN', 'zh-TW', 'ja', 'ko',
-    'de', 'fr', 'es', 'it', 'pt', 'nl', 'pl', 'tr', 'ro', 'vi', 'fi', 'hr',
+    'de', 'fr', 'es', 'it', 'pt', 'nl', 'no', 'pl', 'tr', 'ro', 'vi', 'fi', 'hr',
     'cs', 'hu', 'sv', 'da',
     'ru', 'uk', 'el', 'th', 'bg'
 ]);
