@@ -7,7 +7,7 @@ from typing import List
 
 import requests
 
-from .base import TranslationProvider, ProviderType, NetworkError, ApiKeyError
+from .base import TranslationProvider, ProviderType, NetworkError, ApiKeyError, RateLimitError, classify_google_error
 
 logger = logging.getLogger(__name__)
 
@@ -119,15 +119,16 @@ class GoogleTranslateProvider(TranslationProvider):
             if response.status_code != 200:
                 logger.error(f"Google Translate API error: {response.status_code}")
                 logger.error(f"Response: {response.text[:500]}")
-                # Check for API key errors
-                if response.status_code == 400:
-                    try:
-                        error_data = response.json()
-                        error_msg = error_data.get('error', {}).get('message', '')
-                        if 'API key not valid' in error_msg or 'API_KEY_INVALID' in response.text:
-                            raise ApiKeyError("Invalid API key")
-                    except (ValueError, KeyError):
-                        pass
+                reason = classify_google_error(response.status_code, response.text)
+                if reason in (
+                    "Invalid API key",
+                    "API not enabled in Cloud project",
+                    "Billing not enabled",
+                    "Access blocked (key restriction)",
+                ):
+                    raise ApiKeyError(reason)
+                if reason == "Rate limited":
+                    raise RateLimitError(reason)
                 return texts
 
             result = response.json()
@@ -144,8 +145,8 @@ class GoogleTranslateProvider(TranslationProvider):
                 logger.error("Unexpected response format from Translation API")
                 return texts
 
-        except ApiKeyError:
-            raise  # Re-raise API key errors
+        except (ApiKeyError, RateLimitError):
+            raise
         except requests.exceptions.ConnectionError as e:
             logger.error(f"Google Translate connection error: {e}")
             raise NetworkError("No internet connection") from e
@@ -168,13 +169,8 @@ class GoogleTranslateProvider(TranslationProvider):
                 return False, "Network unreachable"
             except Exception as e:
                 return False, f"Probe failed: {type(e).__name__}"
-            code = resp.status_code
-            if code == 200:
+            if resp.status_code == 200:
                 return True, ""
-            if code in (400, 401, 403):
-                return False, "Invalid API key"
-            if code == 429:
-                return False, "Rate limited"
-            return False, f"API error ({code})"
+            return False, classify_google_error(resp.status_code, resp.text)
 
         return await asyncio.to_thread(_probe)

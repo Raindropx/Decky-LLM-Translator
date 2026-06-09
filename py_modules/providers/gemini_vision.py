@@ -17,6 +17,7 @@ from .base import (
     NetworkError,
     ApiKeyError,
     RateLimitError,
+    classify_google_error,
 )
 
 logger = logging.getLogger(__name__)
@@ -402,12 +403,7 @@ class GeminiVisionProvider(OCRProvider):
                 resp = requests.post(url, json=payload, timeout=10)
                 if resp.status_code == 200:
                     return True, ""
-                elif resp.status_code in (401, 403):
-                    return False, "Invalid API key"
-                elif resp.status_code == 429:
-                    return False, "Rate limited"
-                else:
-                    return False, f"API error ({resp.status_code})"
+                return False, classify_google_error(resp.status_code, resp.text)
             except Exception as e:
                 return False, str(e)
 
@@ -427,13 +423,8 @@ class GeminiVisionProvider(OCRProvider):
                 return False, "Network unreachable"
             except Exception as e:
                 return False, f"Probe failed: {type(e).__name__}"
-            code = resp.status_code
-            if code == 200:
+            if resp.status_code == 200:
                 return True, ""
-            if code in (400, 401, 403):
-                return False, "Invalid API key"
-            if code == 429:
-                return False, "Rate limited"
-            return False, f"API error ({code})"
+            return False, classify_google_error(resp.status_code, resp.text)
 
         return await asyncio.to_thread(_probe)

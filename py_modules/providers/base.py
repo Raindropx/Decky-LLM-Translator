@@ -22,6 +22,24 @@ class RateLimitError(Exception):
     pass
 
 
+def classify_google_error(status_code: int, body: str) -> str:
+    """Logging for a non-200 Google API response."""
+    body = body or ""
+    if 'API_KEY_INVALID' in body or 'API key not valid' in body:
+        return "Invalid API key"
+    if 'SERVICE_DISABLED' in body or 'has not been used' in body or 'it is disabled' in body:
+        return "API not enabled in Cloud project"
+    if 'BILLING_DISABLED' in body or 'billing' in body:
+        return "Billing not enabled"
+    if status_code == 401:
+        return "Invalid API key"
+    if status_code == 403:
+        return "Access blocked (key restriction)"
+    if status_code == 429:
+        return "Rate limited"
+    return f"API error ({status_code})"
+
+
 class ProviderType(Enum):
     """Enum for available provider types."""
     GOOGLE = "google"           # Google Cloud (requires API key)

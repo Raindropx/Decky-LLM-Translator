@@ -1,7 +1,7 @@
 // TextTranslator.tsx
 
 import { call } from "@decky/api";
-import { TextRegion, NetworkError, ApiKeyError, ModelNotAvailableError, ErrorResponse } from "./TextRecognizer";
+import { TextRegion, NetworkError, ApiKeyError, RateLimitError, ModelNotAvailableError, ErrorResponse } from "./TextRecognizer";
 import { logger } from "./Logger";
 
 // Type guard to check if response is an error
@@ -70,6 +70,10 @@ export class TextTranslator {
                         logger.error('TextTranslator', `Model not available: ${errorResponse.message}`);
                         throw new ModelNotAvailableError(errorResponse.message);
                     }
+                    if (errorResponse.error === 'rate_limit_error') {
+                        logger.error('TextTranslator', `Rate limit error: ${errorResponse.message}`);
+                        throw new RateLimitError(errorResponse.message);
+                    }
                     logger.error('TextTranslator', `Error from backend: ${errorResponse.error} - ${errorResponse.message}`);
                     // Return original text on error
                     return textRegions.map(region => ({
@@ -90,7 +94,7 @@ export class TextTranslator {
             }));
         } catch (error) {
             // Re-throw known errors to be handled by caller
-            if (error instanceof NetworkError || error instanceof ApiKeyError || error instanceof ModelNotAvailableError) {
+            if (error instanceof NetworkError || error instanceof ApiKeyError || error instanceof RateLimitError || error instanceof ModelNotAvailableError) {
                 throw error;
             }
             logger.error('TextTranslator', 'Text translation error', error);

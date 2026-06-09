@@ -407,7 +407,7 @@ export class GameTranslatorLogic {
                     this.imageState.hideImage();
                 }, 2500); // 2.5 seconds delay for network error
             } else if (error instanceof ApiKeyError) {
-                this.imageState.updateProcessingStep("Invalid API key", true);
+                this.imageState.updateProcessingStep(error.message || "Invalid API key", true);
                 // Hide overlay after showing the error message
                 setTimeout(() => {
                     this.imageState.hideImage();

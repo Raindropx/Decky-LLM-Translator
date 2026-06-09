@@ -9,7 +9,7 @@ from typing import List
 
 import requests
 
-from .base import OCRProvider, ProviderType, TextRegion, NetworkError, ApiKeyError
+from .base import OCRProvider, ProviderType, TextRegion, NetworkError, ApiKeyError, RateLimitError, classify_google_error
 
 logger = logging.getLogger(__name__)
 
@@ -97,22 +97,23 @@ class GoogleVisionProvider(OCRProvider):
             if response.status_code != 200:
                 logger.error(f"Google Vision API error: {response.status_code}")
                 logger.error(f"Response: {response.text[:500]}")
-                # Check for API key errors
-                if response.status_code == 400:
-                    try:
-                        error_data = response.json()
-                        error_msg = error_data.get('error', {}).get('message', '')
-                        if 'API key not valid' in error_msg or 'API_KEY_INVALID' in response.text:
-                            raise ApiKeyError("Invalid API key")
-                    except (ValueError, KeyError):
-                        pass
+                reason = classify_google_error(response.status_code, response.text)
+                if reason in (
+                    "Invalid API key",
+                    "API not enabled in Cloud project",
+                    "Billing not enabled",
+                    "Access blocked (key restriction)",
+                ):
+                    raise ApiKeyError(reason)
+                if reason == "Rate limited":
+                    raise RateLimitError(reason)
                 return []
 
             result = response.json()
             return self._parse_response(result)
 
-        except ApiKeyError:
-            raise  # Re-raise API key errors
+        except (ApiKeyError, RateLimitError):
+            raise
         except requests.exceptions.ConnectionError as e:
             logger.error(f"Google Vision connection error: {e}")
             raise NetworkError("No internet connection") from e
@@ -128,21 +129,19 @@ class GoogleVisionProvider(OCRProvider):
             return False, "API key required"
 
         def _probe():
-            url = f"https://vision.googleapis.com/$discovery/rest?version=v1&key={self._api_key}"
+            url = f"{self._endpoint}?key={self._api_key}"
             try:
-                resp = requests.get(url, timeout=4)
+                resp = requests.post(url, json={"requests": []}, timeout=4)
             except (requests.ConnectionError, requests.Timeout):
                 return False, "Network unreachable"
             except Exception as e:
                 return False, f"Probe failed: {type(e).__name__}"
-            code = resp.status_code
-            if code == 200:
+            if resp.status_code == 200:
                 return True, ""
-            if code in (400, 401, 403):
-                return False, "Invalid API key"
-            if code == 429:
-                return False, "Rate limited"
-            return False, f"API error ({code})"
+            reason = classify_google_error(resp.status_code, resp.text)
+            if resp.status_code == 400 and reason == "API error (400)":
+                return True, ""
+            return False, reason
 
         return await asyncio.to_thread(_probe)
 
