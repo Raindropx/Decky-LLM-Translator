@@ -38,6 +38,7 @@ export interface Settings {
     hideIdenticalTranslations: boolean;
     allowLabelGrowth: boolean;
     customRecognitionSettings: boolean;
+    translationCacheEnabled: boolean;
 }
 
 // Define action types
@@ -79,6 +80,7 @@ const initialSettings: Settings = {
     hideIdenticalTranslations: false,
     allowLabelGrowth: false,
     customRecognitionSettings: false,
+    translationCacheEnabled: true,
 };
 
 // Create the reducer
@@ -155,6 +157,7 @@ export const SettingsProvider: React.FC<SettingsProviderProps> = ({
                     hideIdenticalTranslations: serverSettings.hide_identical_translations ?? false,
                     allowLabelGrowth: serverSettings.allow_label_growth ?? false,
                     customRecognitionSettings: serverSettings.custom_recognition_settings ?? false,
+                    translationCacheEnabled: serverSettings.translation_cache_enabled ?? true,
                 };
 
                 // Update settings in context
@@ -236,7 +239,8 @@ export const SettingsProvider: React.FC<SettingsProviderProps> = ({
                 translatedTextFontStyle: 'translated_text_font_style',
                 hideIdenticalTranslations: 'hide_identical_translations',
                 allowLabelGrowth: 'allow_label_growth',
-                customRecognitionSettings: 'custom_recognition_settings'
+                customRecognitionSettings: 'custom_recognition_settings',
+                translationCacheEnabled: 'translation_cache_enabled'
             };
 
             // Skip settings that don't need to be saved to backend

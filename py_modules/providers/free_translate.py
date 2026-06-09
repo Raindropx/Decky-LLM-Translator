@@ -128,7 +128,7 @@ class FreeTranslateProvider(TranslationProvider):
 
             if response.status_code != 200:
                 logger.warning(f"Translation request failed: {response.status_code}")
-                return text
+                return None
 
             # Parse response - it returns nested arrays
             # [[["translated text","original text",null,null,10]],null,"ja",...]
@@ -145,7 +145,7 @@ class FreeTranslateProvider(TranslationProvider):
                     if translated_text:
                         return translated_text
 
-            return text
+            return None
 
         except requests.exceptions.ConnectionError as e:
             logger.error(f"Free Translate connection error: {e}")
@@ -155,7 +155,7 @@ class FreeTranslateProvider(TranslationProvider):
             raise NetworkError("Connection timed out") from e
         except Exception as e:
             logger.error(f"Translation error: {e}")
-            return text
+            return None
 
     async def translate(self, text: str, source_lang: str, target_lang: str) -> str:
         """
@@ -182,7 +182,7 @@ class FreeTranslateProvider(TranslationProvider):
             self._translate_single, text, src, tgt
         )
 
-        return result
+        return result if result is not None else text
 
     async def translate_batch(self, texts: List[str], source_lang: str, target_lang: str) -> List[str]:
         """
@@ -223,14 +223,15 @@ class FreeTranslateProvider(TranslationProvider):
                 if not text or not text.strip():
                     return index, text, None
                 try:
+                    # None means this item failed - keep it None so it isn't cached as a real result
                     translated = self._translate_single(text, src, tgt, session)
-                    return index, translated if translated else text, None
+                    return index, translated, None
                 except NetworkError as e:
                     # Propagate network errors - don't silently fail
                     return index, text, e
                 except Exception as e:
                     logger.warning(f"Failed to translate text at index {index}: {e}")
-                    return index, text, None
+                    return index, None, None
 
             network_error = None
             try:
@@ -252,7 +253,7 @@ class FreeTranslateProvider(TranslationProvider):
                         except Exception as e:
                             index = futures[future]
                             logger.warning(f"Translation future failed for index {index}: {e}")
-                            results[index] = texts[index]
+                            results[index] = None
 
             finally:
                 session.close()

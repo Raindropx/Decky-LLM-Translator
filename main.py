@@ -91,6 +91,7 @@ import requests
 
 # Import provider system
 from providers import ProviderManager, TextRegion, NetworkError, ApiKeyError, RateLimitError
+from providers.translation_cache import TranslationCache, PROVIDER_TIERS, normalize
 
 _processing_lock = False
 
@@ -1172,6 +1173,10 @@ class Plugin:
     _ocr_provider: str = "chromescreenai"  # "rapidocr" (RapidOCR), "ocrspace" (OCR.space), or "googlecloud" (Google Cloud)
     _translation_provider: str = "freegoogle"  # "freegoogle" or "googlecloud"
 
+    # Translation cache
+    _translation_cache: TranslationCache = None
+    _translation_cache_enabled: bool = True
+
     # OCR API configurations - user must provide their own API key
     _google_vision_api_key: str = ""
     _google_translate_api_key: str = ""
@@ -1462,6 +1467,8 @@ class Plugin:
                         self._provider_manager.stop_ct2_worker()
                     elif plugin_enabled:
                         self._provider_manager.resume_ct2_worker()
+            elif key == "translation_cache_enabled":
+                self._translation_cache_enabled = bool(value)
             else:
                 logger.warning(f"Unknown setting key: {key}")
 
@@ -1506,6 +1513,7 @@ class Plugin:
                 "hide_identical_translations": self._settings.get_setting("hide_identical_translations", False),
                 "allow_label_growth": self._settings.get_setting("allow_label_growth", False),
                 "custom_recognition_settings": self._settings.get_setting("custom_recognition_settings", False),
+                "translation_cache_enabled": self._translation_cache_enabled,
             }
             return settings
         except Exception as e:
@@ -2210,6 +2218,15 @@ class Plugin:
             # skip the translation step entirely
             if all(r.get("translatedText") is not None for r in text_regions):
                 logger.info(f"Translation skipped: {len(text_regions)} regions already translated by OCR provider")
+                if (self._translation_cache_enabled and self._translation_cache
+                        and self._ocr_provider == "gemini_vision"):
+                    pairs = [(r["text"], r["translatedText"]) for r in text_regions]
+                    if any(normalize(s) != normalize(t) for s, t in pairs):
+                        await asyncio.to_thread(
+                            self._translation_cache.put_many,
+                            pairs, input_lang, target_lang,
+                            PROVIDER_TIERS.get("gemini_vision", 0), "gemini_vision",
+                        )
                 return text_regions
 
             # Check if CT2 provider has the needed models
@@ -2221,33 +2238,60 @@ class Plugin:
                     return {"error": "model_not_available", "message": "Offline model not found. Download it in plugin settings"}
 
             # Only translate regions that don't already have translatedText
-            needs_translation = [
-                (i, region) for i, region in enumerate(text_regions)
+            texts_to_translate = [
+                region["text"] for region in text_regions
                 if region.get("translatedText") is None
             ]
-            texts_to_translate = [region["text"] for _, region in needs_translation]
+
+            cache_on = self._translation_cache_enabled and self._translation_cache is not None
+            provider_tier = PROVIDER_TIERS.get(self._translation_provider, 0)
+
+            cached = {}
+            if cache_on and texts_to_translate:
+                cached = await asyncio.to_thread(
+                    self._translation_cache.get_many,
+                    texts_to_translate, input_lang, target_lang, provider_tier,
+                )
+
+            if cache_on:
+                to_request, seen = [], set()
+                for t in texts_to_translate:
+                    if t not in cached and t not in seen:
+                        seen.add(t)
+                        to_request.append(t)
+            else:
+                to_request = texts_to_translate
 
             start_time = time.time()
-            translated_texts = await self._provider_manager.translate_text(
-                texts_to_translate,
-                source_lang=input_lang,
-                target_lang=target_lang
-            )
+            requested = await self._provider_manager.translate_text(
+                to_request, source_lang=input_lang, target_lang=target_lang
+            ) if to_request else []
             elapsed = time.time() - start_time
-            logger.info(f"Translation completed in {elapsed:.2f}s, {len(texts_to_translate)} regions")
-            for i, (src, dst) in enumerate(zip(texts_to_translate, translated_texts)):
+            logger.info(f"Translation completed in {elapsed:.2f}s, {len(to_request)} new / {len(cached)} cached")
+            for i, (src, dst) in enumerate(zip(to_request, requested)):
                 logger.debug(f"  [{i}] '{src}' -> '{dst}'")
 
-            # Merge: use existing translatedText where available, API results for the rest
-            translation_iter = iter(translated_texts)
+            # Failed items come back as None
+            translated = [(s, t) for s, t in zip(to_request, requested) if t is not None]
+            if cache_on and any(normalize(s) != normalize(t) for s, t in translated):
+                await asyncio.to_thread(
+                    self._translation_cache.put_many,
+                    translated, input_lang, target_lang, provider_tier, self._translation_provider,
+                )
+
+            # A failed item shows its original text.
+            result_map = {s: (t if t is not None else s) for s, t in zip(to_request, requested)}
+            result_map.update(cached)
+
             translated_regions = []
             for region in text_regions:
                 if region.get("translatedText") is not None:
                     translated_regions.append(region)
                 else:
+                    text = region["text"]
                     translated_regions.append({
                         **region,
-                        "translatedText": next(translation_iter, region["text"])
+                        "translatedText": result_map.get(text, text)
                     })
 
             logger.debug(f"Returning {len(translated_regions)} translated regions (from {len(text_regions)} input regions)")
@@ -2297,6 +2341,46 @@ class Plugin:
 
     async def set_input_mode(self, mode):
         return await self.set_setting("input_mode", mode)
+
+    async def clear_translation_cache(self):
+        try:
+            if not self._translation_cache:
+                return {"success": False, "cleared": 0}
+            cleared = await asyncio.to_thread(self._translation_cache.clear)
+            return {"success": True, "cleared": cleared}
+        except Exception as e:
+            logger.error(f"Error clearing translation cache: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def get_translation_cache_stats(self):
+        try:
+            if not self._translation_cache:
+                return {"entries": 0, "hits": 0, "size_bytes": 0}
+            return await asyncio.to_thread(self._translation_cache.stats)
+        except Exception as e:
+            logger.error(f"Error getting translation cache stats: {e}")
+            return {"entries": 0, "hits": 0, "size_bytes": 0}
+
+    async def get_translation_cache_entries(self, limit: int = 300):
+        try:
+            if not self._translation_cache:
+                return []
+            return await asyncio.to_thread(self._translation_cache.list_entries, limit)
+        except Exception as e:
+            logger.error(f"Error getting translation cache entries: {e}")
+            return []
+
+    async def delete_translation_cache_entry(self, source_lang, target_lang, source_text):
+        try:
+            if not self._translation_cache:
+                return {"success": False}
+            removed = await asyncio.to_thread(
+                self._translation_cache.delete_entry, source_lang, target_lang, source_text
+            )
+            return {"success": True, "removed": removed}
+        except Exception as e:
+            logger.error(f"Error deleting translation cache entry: {e}")
+            return {"success": False, "error": str(e)}
 
     async def start_hidraw_monitor(self):
         try:
@@ -2578,6 +2662,9 @@ class Plugin:
                 self._confidence_threshold = load_setting("confidence_threshold", self._confidence_threshold)
             self._pause_game_on_overlay = load_setting("pause_game_on_overlay", self._pause_game_on_overlay)
             self._quick_toggle_enabled = load_setting("quick_toggle_enabled", self._quick_toggle_enabled)
+            self._translation_cache_enabled = bool(
+                load_setting("translation_cache_enabled", self._translation_cache_enabled)
+            )
 
             os.makedirs(self._screenshotPath, exist_ok=True)
 
@@ -2630,6 +2717,14 @@ class Plugin:
             # Chrome Screen AI so they all persist across plugin updates.
             rapidocr_models_dir = os.path.join(settingsDir, "decky-translator", "models")
             os.makedirs(rapidocr_models_dir, exist_ok=True)
+
+            try:
+                self._translation_cache = TranslationCache(
+                    os.path.join(settingsDir, "translation_cache.db")
+                )
+            except Exception as e:
+                logger.error(f"Failed to open translation cache, continuing without it: {e}")
+                self._translation_cache = None
 
             # Initialize provider manager
             self._provider_manager = ProviderManager()
@@ -2722,6 +2817,10 @@ class Plugin:
         try:
             if self._provider_manager:
                 self._provider_manager.shutdown()
+
+            if self._translation_cache:
+                self._translation_cache.close()
+                self._translation_cache = None
 
             if self._evdev_monitor:
                 self._evdev_monitor.stop()
