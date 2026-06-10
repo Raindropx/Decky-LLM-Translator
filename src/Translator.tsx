@@ -348,6 +348,9 @@ export class GameTranslatorLogic {
             this.imageState.startLoading("Processing");
             this.imageState.showImage(result.base64);
             this.imageState.updateProcessingStep("Recognizing text");
+            const recognizingStep = this.ocrProvider === 'gemini_vision'
+                ? "Recognizing and Translating"
+                : "Recognizing";
 
             const textRegions = await this.textRecognizer.recognizeTextFile(result.path);
             if (isCancelled()) {
