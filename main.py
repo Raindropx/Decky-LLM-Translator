@@ -1606,34 +1606,41 @@ class Plugin:
 
             uid = os.getuid()
             xdg_runtime = f"/run/user/{uid}"
-            env = os.environ.copy()
-            if self._session_env is None:
-                self._session_env = self._load_session_env()
-                logger.info(f"Session env borrowed: XDG_CURRENT_DESKTOP={self._session_env.get('XDG_CURRENT_DESKTOP', '<unset>')}")
-            for k, v in self._session_env.items():
-                env.setdefault(k, v)
-            env.setdefault("XDG_RUNTIME_DIR", xdg_runtime)
-            env.setdefault("DBUS_SESSION_BUS_ADDRESS", f"unix:path={xdg_runtime}/bus")
-            env.setdefault("WAYLAND_DISPLAY", "wayland-0")
-            env.setdefault("HOME", DECKY_HOME)
 
-            if self._capture_backend is None:
-                self._capture_backend = await self._select_capture_backend(env)
+            result = {"path": "", "base64": ""}
+            for _ in range(2):
+                if self._capture_backend is None or self._session_env is None:
+                    self._session_env = self._load_session_env()
+                    logger.info(f"Session env borrowed: XDG_CURRENT_DESKTOP={self._session_env.get('XDG_CURRENT_DESKTOP', '<unset>')}")
 
-            if self._capture_backend == "pipewire":
-                return await self._take_screenshot_pipewire(
-                    env, screenshot_path,
-                    MIN_VALID_SIZE, MAX_ATTEMPTS, FALLBACK_NUM_BUFFERS, FALLBACK_STDDEV_THRESHOLD,
-                )
+                env = os.environ.copy()
+                for k, v in self._session_env.items():
+                    env.setdefault(k, v)
+                env.setdefault("XDG_RUNTIME_DIR", xdg_runtime)
+                env.setdefault("DBUS_SESSION_BUS_ADDRESS", f"unix:path={xdg_runtime}/bus")
+                env.setdefault("WAYLAND_DISPLAY", "wayland-0")
+                env.setdefault("HOME", DECKY_HOME)
 
-            if self._capture_backend == "spectacle":
-                return await self._take_screenshot_spectacle(env, screenshot_path, MIN_VALID_SIZE)
+                if self._capture_backend is None:
+                    self._capture_backend = await self._select_capture_backend(env)
 
-            if self._capture_backend == "portal":
-                return await self._take_screenshot_portal(env, screenshot_path, MIN_VALID_SIZE)
+                if self._capture_backend == "pipewire":
+                    result = await self._take_screenshot_pipewire(
+                        env, screenshot_path,
+                        MIN_VALID_SIZE, MAX_ATTEMPTS, FALLBACK_NUM_BUFFERS, FALLBACK_STDDEV_THRESHOLD,
+                    )
+                elif self._capture_backend == "spectacle":
+                    result = await self._take_screenshot_spectacle(env, screenshot_path, MIN_VALID_SIZE)
+                elif self._capture_backend == "portal":
+                    result = await self._take_screenshot_portal(env, screenshot_path, MIN_VALID_SIZE)
+                else:
+                    logger.error("No capture backend available for this session")
+                    return result
 
-            logger.error("No capture backend available for this session")
-            return {"path": "", "base64": ""}
+                if result["path"] or self._capture_backend is not None:
+                    return result
+
+            return result
 
         except Exception as e:
             logger.error(f"Screenshot error: {e}")
@@ -1763,6 +1770,11 @@ class Plugin:
                 logger.debug(f"Attempt {attempt}: GStreamer stderr: {stderr_output}")
             logger.debug(f"Attempt {attempt}: GStreamer return code: {proc.returncode} (timed_out={timed_out})")
 
+            if "target not found" in stderr_output:
+                # source node is gone (likely a mode switch), retries won't bring it back
+                logger.warning("Pipewire source not found, skipping retries")
+                break
+
             if self._has_pngenc:
                 if not os.path.exists(screenshot_path):
                     logger.warning(f"Attempt {attempt}: screenshot file not created")
@@ -1814,7 +1826,7 @@ class Plugin:
                 logger.debug(f"Screenshot saved via Pillow ({len(png_bytes)} bytes) on attempt {attempt}")
                 return {"path": screenshot_path, "base64": base64_data}
 
-        logger.error(f"Screenshot capture failed after {MAX_ATTEMPTS} attempts")
+        logger.error(f"Screenshot capture failed after {attempt} attempt(s)")
         self._capture_backend = None
         return {"path": "", "base64": ""}
 
