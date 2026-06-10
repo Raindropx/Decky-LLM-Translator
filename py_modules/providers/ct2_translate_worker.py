@@ -5,12 +5,14 @@ Persistent subprocess worker for CTranslate2 + NLLB-200 translation.
 Communicates via stdin/stdout JSON-lines protocol.
 Commands:
     {"cmd": "load", "model_dir": "/path/to/model"}
-    {"cmd": "translate", "texts": ["Hello", "World"], "src_lang": "eng_Latn", "tgt_lang": "fra_Latn"}
+    {"cmd": "translate", "texts": ["Hello", "World"], "src_langs": ["eng_Latn", "eng_Latn"], "tgt_lang": "fra_Latn"}
+        (src_lang is also accepted as a single default for all items)
+    {"cmd": "lid", "texts": ["..."], "candidates": [["de", "en"]]}
     {"cmd": "unload"}
     {"cmd": "shutdown"}
 
 Responses:
-    {"ok": true, "translations": ["..."]}
+    {"ok": true, "translations": ["..."], "fallbacks": [false, ...]}
     {"ok": false, "error": "message"}
 
 Self-terminates after 10 minutes of inactivity.
@@ -21,17 +23,97 @@ import os
 import sys
 import time
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import language_detection
+
 IDLE_TIMEOUT = 600  # 10 minutes
 
 # Skip the idle timeout when parent sets CT2_PERSISTENT=1
 PERSISTENT = os.environ.get("CT2_PERSISTENT") == "1"
 
+_DASH_PREFIXES = ("-", "–", "—", "‐", "−", "‑")
+
+_LID_MIN_PROB = 0.9
+
+_lid_identifier = None
+_lid_unavailable = False
+
+
+def _get_lid():
+    global _lid_identifier, _lid_unavailable
+    if _lid_identifier is not None or _lid_unavailable:
+        return _lid_identifier
+    try:
+        from py3langid.langid import LanguageIdentifier, MODEL_FILE
+        _lid_identifier = LanguageIdentifier.from_pickled_model(
+            MODEL_FILE, norm_probs=True
+        )
+    except Exception:
+        _lid_unavailable = True
+    return _lid_identifier
+
+
+def lid_texts(texts, candidates):
+    """Classify each text within its candidate lid codes; None when unsure."""
+    identifier = _get_lid()
+    if identifier is None:
+        return {"ok": True, "langs": [None] * len(texts), "available": False}
+    langs = []
+    for text, cands in zip(texts, candidates):
+        code = None
+        try:
+            identifier.set_languages(sorted(set(cands)))
+            lang, prob = identifier.classify(text)
+            if prob >= _LID_MIN_PROB:
+                code = lang
+        except Exception:
+            code = None
+        langs.append(code)
+    return {"ok": True, "langs": langs, "available": True}
+
 
 def _has_oscillatory_repetition(tokens):
     if len(tokens) < 9:
         return False
-    trigrams = [tuple(tokens[i:i + 3]) for i in range(len(tokens) - 2)]
+    # Mask digits so "X: 4 ... X: 21 ..." patterns still count as repeats
+    masked = ["0" if any(c.isdigit() for c in t) else t for t in tokens]
+    trigrams = [tuple(masked[i:i + 3]) for i in range(len(masked) - 2)]
     return len(set(trigrams)) / len(trigrams) < 0.5
+
+
+def _norm_for_copy(s):
+    return " ".join(s.split()).casefold()
+
+
+def _is_dash_hallucination(src, out):
+    return out.lstrip().startswith(_DASH_PREFIXES) and not src.lstrip().startswith(_DASH_PREFIXES)
+
+
+def _is_source_copy_with_tail(src, out):
+    if sum(1 for c in src if c.isalpha()) < 5:
+        return False
+    ns = _norm_for_copy(src)
+    no = _norm_for_copy(out)
+    return len(no) >= len(ns) + 3 and no.startswith(ns)
+
+
+def _output_script_mismatch(src, out, tgt_lang):
+    expected = language_detection.flores_families(tgt_lang)
+    if not expected:
+        return False
+    out_letters = sum(1 for c in out if c.isalpha())
+    if out_letters < 4:
+        return False
+    fams = language_detection.letter_families(out)
+    in_target = sum(n for f, n in fams.items() if f in expected)
+    if in_target / out_letters >= 0.5:
+        return False
+    src_letters = sum(1 for c in src if c.isalpha())
+    if src_letters:
+        src_fams = language_detection.letter_families(src)
+        if sum(n for f, n in src_fams.items() if f in expected) / src_letters >= 0.5:
+            return False
+    return True
 
 # Redirect stderr to avoid blocking on pipe buffer
 try:
@@ -110,16 +192,16 @@ def main():
         tokenizer = None
         loaded_model_dir = None
 
-    def translate_texts(texts, src_lang, tgt_lang):
+    def translate_texts(texts, src_langs, tgt_lang):
         if translator is None or tokenizer is None:
             return {"ok": False, "error": "No model loaded"}
 
         try:
-            # NLLB tokenization: [src_lang] + sp_tokens + [</s>]
+            # NLLB tokenization: [src_lang] + sp_tokens + [</s>], source tag per item
             tokenized = []
-            for t in texts:
+            for t, src in zip(texts, src_langs):
                 sp_tokens = tokenizer.encode(t, out_type=str)
-                tokenized.append([src_lang] + sp_tokens + ["</s>"])
+                tokenized.append([src] + sp_tokens + ["</s>"])
 
             # Adapt decoding strategy based on input length.
             # Short texts (labels, single words) are out-of-distribution for
@@ -135,16 +217,14 @@ def main():
                 # EN->JA/KO/ZH/DE can expand >1.5x on 2-4 token inputs
                 max_output = max(int(max_input_tokens * 2) + 2, 5)
             else:
-                # 1.3B distilled is stable at beam=1, so skip beam search and
-                # drop both repetition guards (no_repeat=0 and rep_pen=1.0
-                # disable them). The oscillatory trigram check below is the
-                # backstop if the model does loop.
+                # 1.3B distilled is stable at beam=1, so skip beam search
                 beam = 1
-                no_repeat = 0
+                no_repeat = 4
                 rep_pen = 1.0
                 length_pen = 1.0
-                # 1.5x leaves headroom while capping the tail on bad decodes.
-                max_output = max(int(max_input_tokens * 1.5) + 5, 10)
+                # 32+3n leaves room for high-expansion pairs (ja->en etc.);
+                # the guards below own the runaway cases.
+                max_output = 32 + 3 * max_input_tokens
 
             max_output = min(max_output, 256)
 
@@ -166,6 +246,7 @@ def main():
             translations = []
             token_counts = []
             confidences = []
+            fallbacks = []
             for i, result in enumerate(results):
                 src_text = texts[i]
                 input_token_count = len(tokenized[i]) - 2  # minus lang token and </s>
@@ -175,6 +256,7 @@ def main():
                     translations.append(src_text)
                     token_counts.append({"input": input_token_count, "output": 0})
                     confidences.append(0.0)
+                    fallbacks.append(True)
                     continue
                 tokens = result.hypotheses[0]
                 score = result.scores[0] if result.scores else 0.0
@@ -186,6 +268,7 @@ def main():
                     translations.append(src_text)
                     token_counts.append({"input": input_token_count, "output": 0})
                     confidences.append(round(score, 3))
+                    fallbacks.append(True)
                     continue
                 token_counts.append({"input": input_token_count, "output": len(tokens)})
                 # Per-token log-prob normalizes across output lengths
@@ -195,18 +278,30 @@ def main():
 
                 # Hallucination guard
                 fallback = False
-                if input_token_count <= 4:
-                    if score < -1.5 or len(tokens) > input_token_count * 2 + 2:
+                if _is_dash_hallucination(src_text, text):
+                    if input_token_count > 8:
+                        text = text.lstrip().lstrip("".join(_DASH_PREFIXES)).lstrip()
+                        if not text:
+                            fallback = True
+                    else:
+                        fallback = True
+                if not fallback and _is_source_copy_with_tail(src_text, text):
+                    fallback = True
+                elif input_token_count <= 4:
+                    if per_token < -0.8 or len(tokens) > input_token_count * 2 + 2:
                         fallback = True
                 else:
                     if per_token < -1.0 and len(tokens) > input_token_count * 2:
                         fallback = True
-                    elif _has_oscillatory_repetition(tokens):
-                        fallback = True
+                if not fallback and _has_oscillatory_repetition(tokens):
+                    fallback = True
+                if not fallback and _output_script_mismatch(src_text, text, tgt_lang):
+                    fallback = True
 
                 if fallback:
                     text = src_text
 
+                fallbacks.append(fallback)
                 translations.append(text)
 
             return {
@@ -214,6 +309,7 @@ def main():
                 "translations": translations,
                 "token_counts": token_counts,
                 "confidences": confidences,
+                "fallbacks": fallbacks,
             }
         except Exception as e:
             return {"ok": False, "error": f"Translation failed: {e}"}
@@ -260,15 +356,28 @@ def main():
 
         elif command == "translate":
             texts = cmd.get("texts", [])
+            src_langs = cmd.get("src_langs")
             src_lang = cmd.get("src_lang", "")
             tgt_lang = cmd.get("tgt_lang", "")
+            if src_langs is None and src_lang:
+                src_langs = [src_lang] * len(texts)
             if not texts:
                 send({"ok": True, "translations": []})
-            elif not src_lang or not tgt_lang:
-                send({"ok": False, "error": "src_lang and tgt_lang required"})
+            elif not src_langs or not tgt_lang:
+                send({"ok": False, "error": "src_langs and tgt_lang required"})
+            elif len(src_langs) != len(texts):
+                send({"ok": False, "error": "src_langs length mismatch"})
             else:
-                result = translate_texts(texts, src_lang, tgt_lang)
+                result = translate_texts(texts, src_langs, tgt_lang)
                 send(result)
+
+        elif command == "lid":
+            texts = cmd.get("texts", [])
+            candidates = cmd.get("candidates", [])
+            if len(candidates) != len(texts):
+                send({"ok": False, "error": "candidates length mismatch"})
+            else:
+                send(lid_texts(texts, candidates))
 
         elif command == "unload":
             unload_model()

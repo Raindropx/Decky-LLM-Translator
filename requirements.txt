@@ -10,3 +10,4 @@ onnxruntime>=1.7.0
 ctranslate2>=4.5.0
 sentencepiece>=0.2.0
 protobuf>=6.33.1
+py3langid>=0.3.0
