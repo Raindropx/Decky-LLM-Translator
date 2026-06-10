@@ -12,6 +12,7 @@ from typing import List, Optional
 
 from .base import TranslationProvider, ProviderType
 from .nllb_downloader import NLLB_LANG_MAP, NLLBDownloader
+from .language_detection import CJK_FAMILIES, dominant_family, flores_families
 from . import python_runtime
 
 logger = logging.getLogger(__name__)
@@ -47,6 +48,19 @@ _SENTENCE_END_RE = re.compile(r"[.!?。！？]+[\s　]+")
 _CLAUSE_BREAK_RE = re.compile(r"[,;、，；][\s　]+")
 _CLAUSE_SPLIT_MIN_CHARS = 80
 
+_SENTENCE_ENDERS = set(".!?。！？।…")
+_TRAILING_ENDERS = ".!?。！？।…"
+
+_BULLET_RE = re.compile(r"^(?:[-*•·▪●‣◦›»]|\d{1,3}[.)])(?:\s|$)")
+
+_FAMILY_LANGS = {}
+for _code, _nllb in NLLB_LANG_MAP.items():
+    for _fam in flores_families(_nllb):
+        _FAMILY_LANGS.setdefault(_fam, set()).add(_code)
+
+_LID_MIN_LETTERS = 12
+_PLUGIN_TO_LID = {"zh-CN": "zh", "zh-TW": "zh", "no": "nb"}
+
 
 _ZERO_WIDTH_CHARS = "\u200b\u200c\u200d\u200e\u200f\ufeff"
 
@@ -57,7 +71,7 @@ _PUNCT_FOLD = {
     " ": " ", "　": " ",
 }
 _NORMALIZE_TABLE = str.maketrans(
-    {**_PUNCT_FOLD, **{c: None for c in _ZERO_WIDTH_CHARS}}
+    {**_PUNCT_FOLD, "\r": "\n", **{c: None for c in _ZERO_WIDTH_CHARS}}
 )
 
 
@@ -95,13 +109,145 @@ def _normalize_caps(src: str):
     """Lowercase short ALL-CAPS strings; NLLB handles cased text better.
     Caller re-uppercases the output."""
     stripped = src.strip()
-    if (
-        len(stripped) <= 30
-        and stripped.isupper()
-        and any(c.isalpha() for c in stripped)
-    ):
+    upper = sum(1 for c in stripped if c.isupper())
+    cased = upper + sum(1 for c in stripped if c.islower())
+    if cased >= 4 and upper / cased >= 0.9:
         return stripped.lower(), True
     return src, False
+
+
+def _sentence_case(s: str) -> str:
+    for i, c in enumerate(s):
+        if c.isalpha():
+            return s[:i] + c.upper() + s[i + 1:]
+    return s
+
+
+def _append_terminal_punct(frag: str):
+    """NLLB invents continuations for unterminated input - so close every fragment"""
+    stripped = frag.rstrip()
+    if not stripped or stripped[-1] in _SENTENCE_ENDERS:
+        return stripped, False
+    if not stripped[-1].isalnum():
+        return stripped, False
+    fam = dominant_family(stripped)
+    if fam in CJK_FAMILIES:
+        if len(stripped) <= 8:
+            return stripped, False
+        return stripped + "。", True
+    if len(stripped.split()) <= 3:
+        return stripped, False
+    if fam == "Devanagari":
+        return stripped + "।", True
+    return stripped + ".", True
+
+
+def _soft_wrap_joiner(prev: str, line: str):
+    """Joiner if `line` continues `prev`, else None."""
+    if prev[-1] in _SENTENCE_ENDERS or prev.endswith(":"):
+        return None
+    if _BULLET_RE.match(line):
+        return None
+    if prev.endswith("-"):
+        return ""
+    first = line[0]
+    if first.isalpha() and first.islower():
+        return " "
+    if prev.endswith(","):
+        return " "
+    # Wrapped label/title ending on a single capitalized word
+    if (first.isalpha() and first.isupper()
+            and prev[-1].isalpha() and prev[-1].islower()
+            and len(line.split()) == 1):
+        return " "
+    pf = dominant_family(prev)
+    if pf in CJK_FAMILIES and dominant_family(line) in CJK_FAMILIES and len(prev) >= 20:
+        return ""
+    return None
+
+
+def _split_lines(text: str) -> List[str]:
+    lines = [l.strip() for l in text.split("\n")]
+    lines = [l for l in lines if l]
+    if len(lines) <= 1:
+        return lines
+    merged = [lines[0]]
+    for line in lines[1:]:
+        prev = merged[-1]
+        joiner = _soft_wrap_joiner(prev, line)
+        if joiner is None:
+            merged.append(line)
+        elif joiner == "" and prev.endswith("-"):
+            merged[-1] = prev[:-1] + line
+        else:
+            merged[-1] = prev + joiner + line
+    return merged
+
+
+def _lid_eligible(text: str) -> bool:
+    letters = sum(1 for c in text if c.isalpha())
+    if letters < _LID_MIN_LETTERS:
+        return False
+    if dominant_family(text) not in CJK_FAMILIES and len(text.split()) < 2:
+        return False
+    return True
+
+
+def _route_line(text: str, src_code: str, tgt_code: str):
+    src_fams = flores_families(NLLB_LANG_MAP.get(src_code, ""))
+    tgt_fams = flores_families(NLLB_LANG_MAP.get(tgt_code, ""))
+    fam = dominant_family(text)
+    if fam is None:
+        return "translate", src_code
+    if fam in src_fams:
+        # Latin source can't be told from English (or a Latin target)
+        if fam == "Latin" and _lid_eligible(text):
+            cands = list(dict.fromkeys(
+                [src_code, "en"] + ([tgt_code] if fam in tgt_fams else [])
+            ))
+            if len(cands) >= 2:
+                on = {c: ("translate", c) for c in cands}
+                if tgt_code in on and tgt_code != src_code:
+                    on[tgt_code] = ("passthrough", None)
+                return "lid", {"cands": cands, "on": on,
+                               "default": ("translate", src_code)}
+        return "translate", src_code
+    if fam in tgt_fams:
+        # Already target language
+        if fam == "Latin" and tgt_code != "en" and _lid_eligible(text):
+            return "lid", {"cands": [tgt_code, "en"],
+                           "on": {"en": ("translate", "en"),
+                                  tgt_code: ("passthrough", None)},
+                           "default": ("passthrough", None)}
+        return "passthrough", None
+    # Latin text on a non-Latin source/target pair is almost always English
+    # (Steam UI, changelogs)
+    if fam == "Latin":
+        return "translate", "en"
+    langs = sorted(_FAMILY_LANGS.get(fam, ()))
+    if len(langs) == 1:
+        return "translate", langs[0]
+    if langs and _lid_eligible(text):
+        return "lid", {"cands": langs,
+                       "on": {c: ("translate", c) for c in langs},
+                       "default": ("translate", src_code)}
+    return "translate", src_code
+
+
+def _build_frags(body: str, was_caps: bool) -> List[dict]:
+    fragments = [body]
+    if len(body) >= _SPLIT_SENTENCES_CHAR_LIMIT:
+        split = _split_sentences(body)
+        if len(split) > 1:
+            fragments = split
+    frags = []
+    for f in fragments:
+        if was_caps:
+            f = _sentence_case(f)
+        f, punct_added = _append_terminal_punct(f)
+        frags.append({"text": f, "caps": was_caps,
+                      "punct": punct_added, "idx": None})
+    return frags
 
 
 def _split_sentences(text: str) -> List[str]:
@@ -332,126 +478,180 @@ class CT2TranslateProvider(TranslationProvider):
             if not load_result.get("ok"):
                 return texts
 
-        SENTENCE_ENDERS = set('.!?\u3002\uff01\uff1f')
         slots = []
-        flat_fragments = []
+        lines_meta = []
         for t in texts:
             normalized = _normalize_unicode(t)
             if _should_skip_translation(normalized):
-                slots.append({"source": t, "kind": "skip", "caps": False,
-                              "start": 0, "end": 0})
+                slots.append({"source": t, "kind": "skip", "start": 0, "end": 0})
                 continue
 
-            body, was_caps = _normalize_caps(normalized)
-
-            fragments = [body]
-            if len(body) >= _SPLIT_SENTENCES_CHAR_LIMIT:
-                split = _split_sentences(body)
-                if len(split) > 1:
-                    fragments = split
-
-            # Add a period to longer unpunctuated fragments so NLLB doesn't
-            # invent a continuation.
-            sanitized = []
-            for f in fragments:
-                stripped = f.rstrip()
-                if not stripped:
-                    sanitized.append(f)
+            start = len(lines_meta)
+            for li, line in enumerate(_split_lines(normalized)):
+                sep = "" if li == 0 else "\n"
+                if _should_skip_translation(line):
+                    lines_meta.append({"orig": line, "sep": sep,
+                                       "kind": "skip", "frags": []})
                     continue
-                word_count = len(stripped.split())
-                if stripped[-1] not in SENTENCE_ENDERS and word_count > 3:
-                    sanitized.append(stripped + '.')
+                body, was_caps = _normalize_caps(line)
+                # Route on the lowercased body: LID misreads ALL-CAPS text
+                kind, route = _route_line(body, source_lang, target_lang)
+                if kind == "passthrough":
+                    lines_meta.append({"orig": line, "sep": sep,
+                                       "kind": "passthrough", "frags": []})
+                elif kind == "lid":
+                    lines_meta.append({"orig": line, "sep": sep, "kind": "lid",
+                                       "spec": route, "body": body,
+                                       "caps": was_caps, "frags": []})
                 else:
-                    sanitized.append(stripped)
+                    lines_meta.append({"orig": line, "sep": sep,
+                                       "kind": "translate",
+                                       "frags": _build_frags(body, was_caps),
+                                       "tag": NLLB_LANG_MAP.get(route) or src_nllb})
+            slots.append({"source": t, "kind": "translate",
+                          "start": start, "end": len(lines_meta)})
 
-            start = len(flat_fragments)
-            flat_fragments.extend(sanitized)
-            slots.append({
-                "source": t, "kind": "translate", "caps": was_caps,
-                "start": start, "end": len(flat_fragments),
+        pending = [lm for lm in lines_meta if lm["kind"] == "lid"]
+        if pending:
+            lid_maps = []
+            lid_cands = []
+            for lm in pending:
+                m = {}
+                for c in lm["spec"]["cands"]:
+                    m.setdefault(_PLUGIN_TO_LID.get(c, c), c)
+                lid_maps.append(m)
+                lid_cands.append(sorted(m))
+            resp = self._send_command({
+                "cmd": "lid",
+                "texts": [lm["body"] for lm in pending],
+                "candidates": lid_cands,
             })
-
-        skipped = sum(1 for s in slots if s["kind"] == "skip")
-
-        if not flat_fragments:
-            logger.debug(
-                f"CT2 translate: {len(texts)} inputs, all skipped, {src_nllb} -> {tgt_nllb}"
-            )
-            return [s["source"] for s in slots]
+            langs = resp.get("langs") if resp.get("ok") else None
+            for j, lm in enumerate(pending):
+                detected = None
+                if isinstance(langs, list) and j < len(langs) and langs[j]:
+                    detected = lid_maps[j].get(langs[j])
+                action = lm["spec"]["on"].get(detected) if detected else None
+                if action is None:
+                    action = lm["spec"]["default"]
+                kind, code = action
+                if detected:
+                    logger.debug(f"  CT2 LID {detected} -> {action}: {lm['orig'][:80]}")
+                if kind == "passthrough":
+                    lm["kind"] = "passthrough"
+                else:
+                    lm["kind"] = "translate"
+                    lm["tag"] = NLLB_LANG_MAP.get(code) or src_nllb
+                    lm["frags"] = _build_frags(lm["body"], lm["caps"])
 
         # Dedupe identical fragments (repeated UI strings, names, HP/Lv labels)
         unique_fragments = []
+        unique_tags = []
         dedupe_index = {}
-        unique_for_fragment = []
-        for f in flat_fragments:
-            idx = dedupe_index.get(f)
-            if idx is None:
-                idx = len(unique_fragments)
-                dedupe_index[f] = idx
-                unique_fragments.append(f)
-            unique_for_fragment.append(idx)
+        for lm in lines_meta:
+            for fe in lm["frags"]:
+                key = (fe["text"], lm["tag"])
+                idx = dedupe_index.get(key)
+                if idx is None:
+                    idx = len(unique_fragments)
+                    dedupe_index[key] = idx
+                    unique_fragments.append(fe["text"])
+                    unique_tags.append(lm["tag"])
+                fe["idx"] = idx
 
+        skipped = sum(1 for s in slots if s["kind"] == "skip")
         logger.debug(
-            f"CT2 translate: {len(texts)} inputs, {len(flat_fragments)} fragments "
-            f"({len(unique_fragments)} unique, {skipped} skipped), "
+            f"CT2 translate: {len(texts)} inputs, {len(lines_meta)} lines "
+            f"({len(unique_fragments)} unique fragments, {skipped} regions skipped), "
             f"{src_nllb} -> {tgt_nllb}"
         )
-        for i, f in enumerate(unique_fragments):
-            logger.debug(f"  CT2 input[{i}]: ({len(f)} chars) {f[:200]}")
+        for lm in lines_meta:
+            if lm["kind"] == "passthrough":
+                logger.debug(f"  CT2 line passthrough: {lm['orig'][:80]}")
+            elif lm["kind"] == "translate" and lm["tag"] != src_nllb:
+                logger.debug(f"  CT2 line re-tagged {lm['tag']}: {lm['orig'][:80]}")
 
-        result = self._send_command({
-            "cmd": "translate",
-            "texts": unique_fragments,
-            "src_lang": src_nllb,
-            "tgt_lang": tgt_nllb,
-        })
-        if not result.get("ok"):
-            logger.error(f"Translation failed: {result.get('error')}")
-            return texts
+        if unique_fragments:
+            for i, f in enumerate(unique_fragments):
+                logger.debug(
+                    f"  CT2 input[{i}]: ({len(f)} chars, {unique_tags[i]}) {f[:200]}"
+                )
+            result = self._send_command({
+                "cmd": "translate",
+                "texts": unique_fragments,
+                "src_langs": unique_tags,
+                "tgt_lang": tgt_nllb,
+            })
+            if not result.get("ok"):
+                logger.error(f"Translation failed: {result.get('error')}")
+                return texts
 
-        unique_translations = result.get("translations")
-        if not isinstance(unique_translations, list) or len(unique_translations) != len(unique_fragments):
-            logger.error(
-                f"Worker returned malformed response: expected {len(unique_fragments)} "
-                f"translations, got {len(unique_translations) if isinstance(unique_translations, list) else type(unique_translations).__name__}"
-            )
-            return texts
+            unique_translations = result.get("translations")
+            if not isinstance(unique_translations, list) or len(unique_translations) != len(unique_fragments):
+                logger.error(
+                    f"Worker returned malformed response: expected {len(unique_fragments)} "
+                    f"translations, got {len(unique_translations) if isinstance(unique_translations, list) else type(unique_translations).__name__}"
+                )
+                return texts
+            fallback_flags = result.get("fallbacks")
+            if not isinstance(fallback_flags, list) or len(fallback_flags) != len(unique_fragments):
+                fallback_flags = [False] * len(unique_fragments)
 
-        flat_translations = [unique_translations[i] for i in unique_for_fragment]
-        if result.get("token_counts"):
-            logger.debug(f"  CT2 token counts: {result['token_counts']}")
-        if result.get("confidences"):
-            logger.debug(f"  CT2 per-token log-probs: {result['confidences']}")
+            token_counts = result.get("token_counts") or []
+            if token_counts:
+                logger.debug(f"  CT2 token counts: {token_counts}")
+            if result.get("confidences"):
+                logger.debug(f"  CT2 per-token log-probs: {result['confidences']}")
+            for i, tc in enumerate(token_counts):
+                # Output pinned at the decoding cap means the tail was cut off
+                if tc.get("output", 0) >= min(32 + 3 * tc.get("input", 0), 256):
+                    logger.warning(
+                        f"  CT2 possible truncation on fragment {i}: {unique_fragments[i][:80]}"
+                    )
+        else:
+            unique_translations = []
+            fallback_flags = []
 
         translations = []
         for slot in slots:
             if slot["kind"] == "skip":
                 translations.append(slot["source"])
                 continue
-            pieces = flat_translations[slot["start"]:slot["end"]]
-            out = " ".join(p for p in pieces if p)
-            if slot["caps"]:
-                out = out.upper()
-            translations.append(out)
+            parts = []
+            translated_lines = 0
+            for lm in lines_meta[slot["start"]:slot["end"]]:
+                if lm["kind"] != "translate":
+                    parts.append(lm["sep"] + lm["orig"])
+                    continue
+                pieces = []
+                failed = False
+                for fe in lm["frags"]:
+                    out = unique_translations[fe["idx"]]
+                    if fallback_flags[fe["idx"]] or not out or not out.strip():
+                        failed = True
+                        break
+                    if fe["punct"]:
+                        out = out.rstrip().rstrip(_TRAILING_ENDERS).rstrip()
+                    if fe["caps"]:
+                        out = out.upper()
+                    pieces.append(out)
+                # keep the whole line when rejected
+                if failed:
+                    parts.append(lm["sep"] + lm["orig"])
+                else:
+                    translated_lines += 1
+                    parts.append(lm["sep"] + " ".join(p for p in pieces if p))
+            if translated_lines == 0:
+                # Nothing got translated
+                translations.append(slot["source"])
+            else:
+                translations.append("".join(parts))
 
         for i, t in enumerate(translations):
             src_len = len(texts[i]) if i < len(texts) else 0
             logger.debug(
                 f"  CT2 output[{i}]: ({len(t)} chars, input was {src_len}) {t[:200]}"
             )
-            # Multi-fragment slots can shrink on rejoin
-            slot = slots[i]
-            fragment_count = slot["end"] - slot["start"]
-            if (
-                src_len > 0
-                and len(t) < src_len * 0.3
-                and slot["kind"] == "translate"
-                and fragment_count == 1
-            ):
-                logger.warning(
-                    f"  CT2 possible truncation: output is {len(t)}/{src_len} chars "
-                    f"({len(t)*100//src_len}%)"
-                )
 
         return translations
 
