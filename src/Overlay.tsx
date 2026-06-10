@@ -52,6 +52,7 @@ export class ImageState {
     private translatedRegions: TranslatedRegion[] = [];
     private loading = false;
     private processingStep = ""; // Added to track current processing step
+    private processingDetail = "";
     private processingIsError = false;
     private loadingIndicatorTimer: ReturnType<typeof setTimeout> | null = null; // Timer for delayed indicator
     private translationsVisible = true; // New property to track translation visibility
@@ -60,13 +61,13 @@ export class ImageState {
     private translatedTextAlignment: HorizontalTextAlignment = 'center';
     private translatedTextFontFamily = "";
     private translatedTextFontStyle: FontStyleOption = 'normal';
-    private onStateChangedListeners: Array<(visible: boolean, imageData: string, regions: TranslatedRegion[], loading: boolean, processingStep: string, processingIsError: boolean, translationsVisible: boolean, fontScale: number, allowLabelGrowth: boolean, translatedTextAlignment: HorizontalTextAlignment, translatedTextFontFamily: string, translatedTextFontStyle: FontStyleOption) => void> = [];
+    private onStateChangedListeners: Array<(visible: boolean, imageData: string, regions: TranslatedRegion[], loading: boolean, processingStep: string, processingDetail: string, processingIsError: boolean, translationsVisible: boolean, fontScale: number, allowLabelGrowth: boolean, translatedTextAlignment: HorizontalTextAlignment, translatedTextFontFamily: string, translatedTextFontStyle: FontStyleOption) => void> = [];
 
-    onStateChanged(callback: (visible: boolean, imageData: string, regions: TranslatedRegion[], loading: boolean, processingStep: string, processingIsError: boolean, translationsVisible: boolean, fontScale: number, allowLabelGrowth: boolean, translatedTextAlignment: HorizontalTextAlignment, translatedTextFontFamily: string, translatedTextFontStyle: FontStyleOption) => void): void {
+    onStateChanged(callback: (visible: boolean, imageData: string, regions: TranslatedRegion[], loading: boolean, processingStep: string, processingDetail: string, processingIsError: boolean, translationsVisible: boolean, fontScale: number, allowLabelGrowth: boolean, translatedTextAlignment: HorizontalTextAlignment, translatedTextFontFamily: string, translatedTextFontStyle: FontStyleOption) => void): void {
         this.onStateChangedListeners.push(callback);
     }
 
-    offStateChanged(callback: (visible: boolean, imageData: string, regions: TranslatedRegion[], loading: boolean, processingStep: string, processingIsError: boolean, translationsVisible: boolean, fontScale: number, allowLabelGrowth: boolean, translatedTextAlignment: HorizontalTextAlignment, translatedTextFontFamily: string, translatedTextFontStyle: FontStyleOption) => void): void {
+    offStateChanged(callback: (visible: boolean, imageData: string, regions: TranslatedRegion[], loading: boolean, processingStep: string, processingDetail: string, processingIsError: boolean, translationsVisible: boolean, fontScale: number, allowLabelGrowth: boolean, translatedTextAlignment: HorizontalTextAlignment, translatedTextFontFamily: string, translatedTextFontStyle: FontStyleOption) => void): void {
         const index = this.onStateChangedListeners.indexOf(callback);
         if (index !== -1) {
             this.onStateChangedListeners.splice(index, 1);
@@ -79,6 +80,7 @@ export class ImageState {
         this.visible = true;
         this.loading = true;
         this.processingStep = step;
+        this.processingDetail = "";
         this.processingIsError = false;
         this.translationsVisible = true; // Reset to visible when starting new translation
 
@@ -151,8 +153,9 @@ export class ImageState {
     }
 
     // Update the current processing step
-    updateProcessingStep(step: string, isError: boolean = false): void {
+    updateProcessingStep(step: string, isError: boolean = false, detail: string = ""): void {
         this.processingStep = step;
+        this.processingDetail = detail;
         this.processingIsError = isError;
         // Update the loading state and keep the current image displayed
         this.loading = true;
@@ -210,6 +213,7 @@ export class ImageState {
         // Turn off loading state and clear processing step
         this.loading = false;
         this.processingStep = "";
+        this.processingDetail = "";
         this.processingIsError = false;
 
         logger.info('ImageState', `Showing translated image with ${regions.length} text regions`);
@@ -228,6 +232,7 @@ export class ImageState {
         this.visible = false;
         this.loading = false;
         this.processingStep = "";
+        this.processingDetail = "";
         this.processingIsError = false;
         this.translationsVisible = true; // Reset to default when hiding
 
@@ -242,7 +247,7 @@ export class ImageState {
 
     private notifyListeners(): void {
         for (const callback of this.onStateChangedListeners) {
-            callback(this.visible, this.imageData, this.translatedRegions, this.loading, this.processingStep, this.processingIsError, this.translationsVisible, this.fontScale, this.allowLabelGrowth, this.translatedTextAlignment, this.translatedTextFontFamily, this.translatedTextFontStyle);
+            callback(this.visible, this.imageData, this.translatedRegions, this.loading, this.processingStep, this.processingDetail, this.processingIsError, this.translationsVisible, this.fontScale, this.allowLabelGrowth, this.translatedTextAlignment, this.translatedTextFontFamily, this.translatedTextFontStyle);
         }
     }
 
@@ -366,6 +371,7 @@ export const TranslatedTextOverlay: VFC<{
     regions: TranslatedRegion[],
     loading: boolean,
     processingStep: string,
+    processingDetail: string,
     processingIsError: boolean,
     translationsVisible: boolean,
     fontScale: number,
@@ -373,7 +379,7 @@ export const TranslatedTextOverlay: VFC<{
     translatedTextAlignment: HorizontalTextAlignment,
     translatedTextFontFamily: string,
     translatedTextFontStyle: FontStyleOption
-}> = ({ visible, imageData, regions, loading, processingStep, processingIsError, translationsVisible, fontScale, allowLabelGrowth, translatedTextAlignment, translatedTextFontFamily, translatedTextFontStyle }) => {
+}> = ({ visible, imageData, regions, loading, processingStep, processingDetail, processingIsError, translationsVisible, fontScale, allowLabelGrowth, translatedTextAlignment, translatedTextFontFamily, translatedTextFontStyle }) => {
     // Composition layer is handled by CompositionRequest below -- only mounted when visible
 
     // Ref to the screenshot image element
@@ -756,6 +762,9 @@ export const TranslatedTextOverlay: VFC<{
                     `}</style>
                     <div style={{ fontSize: "14px", whiteSpace: "pre-line", lineHeight: "1.3" }}>
                         {processingIsError ? processingStep : `${processingStep}...`}
+                        {!processingIsError && processingDetail && (
+                            <div style={{ fontSize: "10px", opacity: 0.7 }}>{processingDetail}</div>
+                        )}
                     </div>
                 </div>
             )}
@@ -773,6 +782,7 @@ export const ImageOverlay: VFC<{ state: ImageState, onDismiss: () => void }> = (
     const [regions, setRegions] = useState<TranslatedRegion[]>([]);
     const [loading, setLoading] = useState<boolean>(false);
     const [processingStep, setProcessingStep] = useState<string>("");
+    const [processingDetail, setProcessingDetail] = useState<string>("");
     const [processingIsError, setProcessingIsError] = useState<boolean>(false);
     const [translationsVisible, setTranslationsVisible] = useState<boolean>(true);
     const [fontScale, setFontScale] = useState<number>(1.0);
@@ -790,6 +800,7 @@ export const ImageOverlay: VFC<{ state: ImageState, onDismiss: () => void }> = (
             textRegions: TranslatedRegion[],
             isLoading: boolean,
             currProcessingStep: string,
+            currProcessingDetail: string,
             currProcessingIsError: boolean,
             areTranslationsVisible: boolean,
             currentFontScale: number,
@@ -804,6 +815,7 @@ export const ImageOverlay: VFC<{ state: ImageState, onDismiss: () => void }> = (
             setRegions(textRegions);
             setLoading(isLoading);
             setProcessingStep(currProcessingStep);
+            setProcessingDetail(currProcessingDetail);
             setProcessingIsError(currProcessingIsError);
             setTranslationsVisible(areTranslationsVisible);
             setFontScale(currentFontScale);
@@ -832,6 +844,7 @@ export const ImageOverlay: VFC<{ state: ImageState, onDismiss: () => void }> = (
             regions={regions}
             loading={loading}
             processingStep={processingStep}
+            processingDetail={processingDetail}
             processingIsError={processingIsError}
             translationsVisible={translationsVisible}
             fontScale={fontScale}

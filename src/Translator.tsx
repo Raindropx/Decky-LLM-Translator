@@ -347,10 +347,10 @@ export class GameTranslatorLogic {
 
             this.imageState.startLoading("Processing");
             this.imageState.showImage(result.base64);
-            this.imageState.updateProcessingStep("Recognizing text");
             const recognizingStep = this.ocrProvider === 'gemini_vision'
                 ? "Recognizing and Translating"
                 : "Recognizing";
+            this.imageState.updateProcessingStep(recognizingStep, false, this.ocrMethodHint());
 
             const textRegions = await this.textRecognizer.recognizeTextFile(result.path);
             if (isCancelled()) {
@@ -362,7 +362,7 @@ export class GameTranslatorLogic {
             if (textRegions.length > 0) {
                 const alreadyTranslated = textRegions.every(r => r.translatedText);
                 if (!alreadyTranslated) {
-                    this.imageState.updateProcessingStep("Translating text");
+                    this.imageState.updateProcessingStep("Translating text", false, this.translationMethodHint());
                 }
 
                 // Translate text (skips backend call if already translated by OCR provider)
@@ -528,6 +528,26 @@ export class GameTranslatorLogic {
     setTranslationProvider = (provider: string): void => {
         this.translationProvider = provider;
         logger.debug('Translator', `Translation provider set to: ${provider}`);
+    }
+
+    private translationMethodHint(): string {
+        const labels: Record<string, string> = {
+            ct2: "On-Device",
+            freegoogle: "Google Translate",
+            googlecloud: "Google Cloud",
+        };
+        return labels[this.translationProvider] || this.translationProvider;
+    }
+
+    private ocrMethodHint(): string {
+        const labels: Record<string, string> = {
+            rapidocr: "On-Device",
+            chromescreenai: "On-Device",
+            ocrspace: "OCR.space",
+            googlecloud: "Google Cloud",
+            gemini_vision: "Gemini Vision",
+        };
+        return labels[this.ocrProvider] || this.ocrProvider;
     }
 
     setHasGoogleApiKey = (hasKey: boolean): void => {
