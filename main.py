@@ -92,6 +92,7 @@ import requests
 
 # Import provider system
 from providers import ProviderManager, TextRegion, NetworkError, ApiKeyError, RateLimitError
+from providers.custom_languages import normalize_custom_languages
 from providers.llm_endpoint_utils import next_endpoint_copy_name
 from providers.llm_translation import (
     LLMConfigurationError,
@@ -120,6 +121,8 @@ def _mask_secret(value):
 def _mask_for_log(key, value):
     if key in SENSITIVE_SETTING_KEYS:
         return "<redacted>" if value else value
+    if key == "custom_languages" and isinstance(value, list):
+        return f"<{len(value)} custom languages>"
     return value
 
 
@@ -1173,6 +1176,7 @@ class Plugin:
     _settings = None
     _input_language: str = "auto"  # Default to auto-detect
     _target_language: str = "en"
+    _custom_languages: list = []
     _input_mode: int = 0  # 0 = both touchpads, 1 = left touchpad, 2 = right touchpad
     _hold_time_translate: int = 1000  # Default to 1 second
     _hold_time_dismiss: int = 500  # Default to 0.5 seconds for dismissal
@@ -1324,7 +1328,10 @@ class Plugin:
             value = cleaned
             logger.info(f"{key} set (len={len(value)})")
         try:
-            if key == "target_language":
+            if key == "custom_languages":
+                value = normalize_custom_languages(value)
+                self._custom_languages = value
+            elif key == "target_language":
                 self._target_language = value
             elif key == "input_language":
                 self._input_language = value
@@ -1486,6 +1493,7 @@ class Plugin:
             settings = {
                 "target_language": self._target_language,
                 "input_language": self._input_language,
+                "custom_languages": self._custom_languages,
                 "input_mode": self._input_mode,
                 "enabled": self._settings.get_setting("enabled", True),
                 "use_free_providers": self._use_free_providers,
@@ -2105,6 +2113,7 @@ class Plugin:
 
             results = [
                 self._settings.set_setting("target_language", self._target_language),
+                self._settings.set_setting("custom_languages", self._custom_languages),
                 self._settings.set_setting("google_api_key", self._google_vision_api_key),
                 self._settings.set_setting("input_mode", self._input_mode),
                 self._settings.set_setting("input_language", self._input_language),
@@ -2747,6 +2756,14 @@ class Plugin:
             # Load basic settings
             self._target_language = load_setting("target_language", self._target_language)
             self._input_language = load_setting("input_language", self._input_language)
+            saved_custom_languages = load_setting("custom_languages", [])
+            try:
+                self._custom_languages = normalize_custom_languages(saved_custom_languages)
+                if self._custom_languages != saved_custom_languages:
+                    self._settings.set_setting("custom_languages", self._custom_languages)
+            except ValueError as custom_language_error:
+                self._custom_languages = []
+                logger.warning(f"Ignoring invalid custom languages: {custom_language_error}")
             self._input_mode = load_setting("input_mode", self._input_mode)
             self._hold_time_translate = load_setting("hold_time_translate", self._hold_time_translate)
             self._hold_time_dismiss = load_setting("hold_time_dismiss", self._hold_time_dismiss)

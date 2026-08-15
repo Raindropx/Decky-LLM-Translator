@@ -6,10 +6,16 @@ import { InputMode } from './Input';
 import { logger } from './Logger';
 import type { LLMEndpoint } from './LLMEndpoints';
 
+export interface CustomLanguage {
+    alias: string;
+    definition: string;
+}
+
 // Define the settings interface
 export interface Settings {
     inputLanguage: string;
     targetLanguage: string;
+    customLanguages: CustomLanguage[];
     inputMode: InputMode;
     enabled: boolean;
     initialized: boolean;
@@ -52,6 +58,7 @@ type SettingsAction =
 const initialSettings: Settings = {
     inputLanguage: "",
     targetLanguage: "",
+    customLanguages: [],
     inputMode: InputMode.L5_BUTTON,  // Default to L5 back button
     enabled: true,
     initialized: false,
@@ -158,6 +165,7 @@ export const SettingsProvider: React.FC<SettingsProviderProps> = ({
                 const mappedSettings: Partial<Settings> = {
                     inputLanguage: serverSettings.input_language,
                     targetLanguage: serverSettings.target_language,
+                    customLanguages: serverSettings.custom_languages ?? [],
                     inputMode: serverSettings.input_mode,
                     enabled: serverSettings.enabled,
                     holdTimeTranslate: serverSettings.hold_time_translate,
@@ -238,6 +246,7 @@ export const SettingsProvider: React.FC<SettingsProviderProps> = ({
 
     // Update a single setting
     const updateSetting = async (key: keyof Settings, value: any, label?: string): Promise<boolean> => {
+        const previousValue = settings[key];
         try {
             // Update local state
             const frontendValue = (key === 'googleApiKey' || key === 'geminiApiKey')
@@ -249,6 +258,7 @@ export const SettingsProvider: React.FC<SettingsProviderProps> = ({
             const backendKeyMap: Record<keyof Settings, string> = {
                 inputLanguage: 'input_language',
                 targetLanguage: 'target_language',
+                customLanguages: 'custom_languages',
                 inputMode: 'input_mode',
                 enabled: 'enabled',
                 initialized: 'initialized',
@@ -363,10 +373,18 @@ export const SettingsProvider: React.FC<SettingsProviderProps> = ({
                 // if (label) logic.notify(`${label} updated successfully`);
                 return true;
             } else {
+                if (key === 'customLanguages' || key === 'targetLanguage') {
+                    dispatch({ type: 'UPDATE_SETTING', key, value: previousValue });
+                }
+                if (key === 'targetLanguage') logic.setTargetLanguage(previousValue as string);
                 logic.notify(`Failed to update ${label || key}`, 2000);
                 return false;
             }
         } catch (error) {
+            if (key === 'customLanguages' || key === 'targetLanguage') {
+                dispatch({ type: 'UPDATE_SETTING', key, value: previousValue });
+            }
+            if (key === 'targetLanguage') logic.setTargetLanguage(previousValue as string);
             logger.error('SettingsContext', `Failed to update ${key}`, error);
             logic.notify(`Failed to update ${label || key}`, 2000);
             return false;
