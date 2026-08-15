@@ -4,6 +4,7 @@ from pathlib import Path
 import sys
 import types
 import unittest
+from unittest import mock
 
 try:
     from PIL import Image
@@ -29,6 +30,7 @@ from decky_llm_test_providers.llm_translation import (
     LLMResponseError,
     SYSTEM_PROMPT,
     _annotate_screenshot,
+    _annotate_screenshot_with_bundled_python,
     _chat_completions_url,
     build_ocr_items,
     parse_translation_json,
@@ -103,6 +105,24 @@ class LLMTranslationTests(unittest.TestCase):
         with Image.open(io.BytesIO(result)) as annotated:
             self.assertEqual(annotated.format, "JPEG")
             self.assertLessEqual(max(annotated.size), 1280)
+
+    def test_bundled_annotation_uses_runtime_and_isolated_pythonpath(self):
+        completed = types.SimpleNamespace(returncode=0, stdout=b"jpeg", stderr=b"")
+        runtime = types.ModuleType(f"{TEST_PACKAGE}.python_runtime")
+        runtime.find_python = mock.Mock(return_value="/plugin/bin/python3.13")
+
+        with mock.patch.dict(sys.modules, {runtime.__name__: runtime}):
+            with mock.patch("subprocess.run", return_value=completed) as run:
+                with mock.patch("os.path.isfile", return_value=True):
+                    with mock.patch("os.path.isdir", return_value=True):
+                        result = _annotate_screenshot_with_bundled_python(b"png", [])
+
+        self.assertEqual(result, b"jpeg")
+        command = run.call_args.args[0]
+        self.assertEqual(command[0], "/plugin/bin/python3.13")
+        self.assertTrue(command[1].endswith("annotate_screenshot_subprocess.py"))
+        self.assertEqual(run.call_args.kwargs["env"]["PYTHONNOUSERSITE"], "1")
+        self.assertIn("bin", run.call_args.kwargs["env"]["PYTHONPATH"])
 
 
 if __name__ == "__main__":

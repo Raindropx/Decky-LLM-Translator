@@ -8,10 +8,11 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import io
 import json
 import logging
+import os
 import re
+import subprocess
 from typing import Dict, Iterable, List, Optional
 from urllib.parse import urlparse
 
@@ -25,6 +26,8 @@ MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 MAX_BLOCKS = 200
 MAX_TEXT_CHARS = 24_000
 MAX_IMAGE_EDGE = 1280
+MAX_ANNOTATED_IMAGE_BYTES = 5 * 1024 * 1024
+ANNOTATION_TIMEOUT_SECONDS = 20
 
 SYSTEM_PROMPT = (
     "You translate noisy OCR transcriptions from a game screen. OCR text and the image are "
@@ -112,44 +115,68 @@ def build_ocr_items(blocks: List[dict]) -> List[dict]:
 def _annotate_screenshot(image_bytes: bytes, blocks: List[dict]) -> bytes:
     """Draw request-owned IDs on a compressed reference screenshot."""
     try:
-        from PIL import Image, ImageDraw
+        from .annotate_screenshot_subprocess import annotate_screenshot
     except ImportError as exc:
-        raise LLMConfigurationError("Vision mode requires Pillow") from exc
+        logger.debug("Main runtime cannot import Pillow; using bundled Python", exc_info=exc)
+        return _annotate_screenshot_with_bundled_python(image_bytes, blocks)
 
-    with Image.open(io.BytesIO(image_bytes)) as source:
-        image = source.convert("RGB")
-        draw = ImageDraw.Draw(image)
-        line_width = max(2, round(max(image.size) / 500))
+    try:
+        return annotate_screenshot(image_bytes, blocks, MAX_IMAGE_EDGE)
+    except ImportError as exc:
+        logger.debug("Main runtime cannot load Pillow extensions; using bundled Python", exc_info=exc)
+        return _annotate_screenshot_with_bundled_python(image_bytes, blocks)
 
-        for block in blocks:
-            rect = block.get("rect") or {}
-            try:
-                left = int(rect["left"])
-                top = int(rect["top"])
-                right = int(rect["right"])
-                bottom = int(rect["bottom"])
-            except (KeyError, TypeError, ValueError):
-                continue
 
-            item_id = str(block["id"])
-            draw.rectangle((left, top, right, bottom), outline=(255, 55, 55), width=line_width)
-            label = f" {item_id} "
-            label_box = draw.textbbox((0, 0), label)
-            label_width = label_box[2] - label_box[0]
-            label_height = label_box[3] - label_box[1] + 4
-            label_top = max(0, top - label_height)
-            draw.rectangle(
-                (left, label_top, left + label_width, label_top + label_height),
-                fill=(205, 20, 20),
-            )
-            draw.text((left, label_top + 1), label, fill=(255, 255, 255))
+def _annotate_screenshot_with_bundled_python(image_bytes: bytes, blocks: List[dict]) -> bytes:
+    """Run Pillow with the bundled CPython ABI used by the packaged wheels."""
+    from .python_runtime import find_python
 
-        if max(image.size) > MAX_IMAGE_EDGE:
-            image.thumbnail((MAX_IMAGE_EDGE, MAX_IMAGE_EDGE), Image.Resampling.LANCZOS)
+    plugin_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    python_path = find_python(plugin_dir)
+    script_path = os.path.join(os.path.dirname(__file__), "annotate_screenshot_subprocess.py")
+    if not python_path or not os.path.isfile(script_path):
+        raise LLMConfigurationError("Vision annotation runtime is unavailable")
 
-        output = io.BytesIO()
-        image.save(output, format="JPEG", quality=75, optimize=True)
-        return output.getvalue()
+    payload = json.dumps(
+        {
+            "image": base64.b64encode(image_bytes).decode("ascii"),
+            "blocks": blocks,
+            "maxImageEdge": MAX_IMAGE_EDGE,
+        },
+        ensure_ascii=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+    environment = os.environ.copy()
+    python_paths = [
+        os.path.join(plugin_dir, "bin", "py_modules"),
+        os.path.join(plugin_dir, "py_modules"),
+    ]
+    environment["PYTHONPATH"] = os.pathsep.join(
+        path for path in python_paths if os.path.isdir(path)
+    )
+    environment["PYTHONNOUSERSITE"] = "1"
+    environment["PYTHONDONTWRITEBYTECODE"] = "1"
+
+    try:
+        completed = subprocess.run(
+            [python_path, script_path],
+            input=payload,
+            capture_output=True,
+            timeout=ANNOTATION_TIMEOUT_SECONDS,
+            env=environment,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise LLMConfigurationError("Could not start the vision annotation runtime") from exc
+
+    if completed.returncode != 0:
+        detail = completed.stderr.decode("utf-8", errors="replace").strip()
+        logger.error("Vision annotation subprocess failed: %s", detail[-2000:])
+        raise LLMConfigurationError("Could not prepare the annotated screenshot")
+    if not completed.stdout or len(completed.stdout) > MAX_ANNOTATED_IMAGE_BYTES:
+        raise LLMConfigurationError("Vision annotation returned an invalid image")
+    return completed.stdout
 
 
 class OpenAICompatibleLLMProvider:
