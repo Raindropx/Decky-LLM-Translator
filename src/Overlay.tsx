@@ -681,7 +681,7 @@ export const TranslatedTextOverlay: VFC<{
                         <div style={{
                             position: "absolute",
                             bottom: "20px",
-                            left: "20px",
+                            right: "20px",
                             background: "rgba(0, 0, 0, 0.7)",
                             padding: '10px',
                             borderRadius: '50%',
@@ -719,7 +719,7 @@ export const TranslatedTextOverlay: VFC<{
                     alignItems: "center",
                     position: "absolute",
                     bottom: "20px",
-                    left: "20px",
+                    right: "20px",
                     color: "#ffffff",
                     background: "rgba(0, 0, 0, 0.7)",
                     padding: '8px 12px',

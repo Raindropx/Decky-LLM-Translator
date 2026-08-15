@@ -440,6 +440,88 @@ export class GameTranslatorLogic {
         }
     }
 
+    takeScreenshotAndTestOcr = async (): Promise<void> => {
+        if (this.isProcessing || !this.enabled) {
+            logger.debug('Translator', 'Already processing a screenshot or plugin disabled, skipping OCR test');
+            return;
+        }
+
+        if (!this.canStartOcrTest()) return;
+
+        if (this.imageState.isVisible()) {
+            this.dismiss();
+        }
+
+        const runId = ++this.currentRunId;
+        const isCancelled = (): boolean => runId !== this.currentRunId;
+
+        try {
+            this.isProcessing = true;
+
+            const appName = Router.MainRunningApp?.display_name || "";
+            logger.info('Translator', `Taking new screenshot for OCR test: ${appName}`);
+            const result = await call<[string], ScreenshotResponse>('take_screenshot', appName);
+
+            if (isCancelled()) {
+                logger.debug('Translator', 'OCR test cancelled before screenshot processed');
+                return;
+            }
+
+            if (!result || !result.path || !result.base64) {
+                logger.warn('Translator', 'OCR test screenshot capture failed, not opening overlay');
+                this.notify('Screen capture failed', 2500, 'Try the OCR test again');
+                return;
+            }
+
+            this.imageState.startLoading("Testing OCR");
+            this.imageState.showImage(result.base64);
+            this.imageState.updateProcessingStep("Recognizing", false, this.ocrMethodHint());
+
+            const textRegions = await this.textRecognizer.recognizeTextFile(result.path);
+            if (isCancelled()) {
+                logger.debug('Translator', 'OCR test cancelled after recognition');
+                return;
+            }
+            logger.info('Translator', `OCR test found ${textRegions.length} text regions`);
+
+            if (textRegions.length > 0) {
+                const recognizedRegions = textRegions.map(region => ({
+                    ...region,
+                    translatedText: region.text,
+                }));
+                this.imageState.showTranslatedImage(result.base64, recognizedRegions);
+            } else {
+                this.imageState.updateProcessingStep("No text found");
+                setTimeout(() => {
+                    if (!isCancelled()) this.imageState.hideImage();
+                }, 2000);
+            }
+        } catch (error) {
+            if (isCancelled()) {
+                logger.debug('Translator', 'OCR test cancelled, suppressing error UI', error);
+                return;
+            }
+
+            logger.error('Translator', 'OCR test error', error);
+            if (error instanceof NetworkError) {
+                this.imageState.updateProcessingStep(error.message || "No internet connection", true);
+            } else if (error instanceof ApiKeyError) {
+                this.imageState.updateProcessingStep(error.message || "Invalid API key", true);
+            } else if (error instanceof ModelNotAvailableError || error instanceof RateLimitError) {
+                this.imageState.updateProcessingStep(error.message, true);
+            } else {
+                this.imageState.updateProcessingStep("OCR test failed", true);
+            }
+            setTimeout(() => {
+                if (!isCancelled()) this.imageState.hideImage();
+            }, 3000);
+        } finally {
+            if (!isCancelled()) {
+                this.isProcessing = false;
+            }
+        }
+    }
+
     setInputLanguage = (language: string): void => {
         this.textTranslator.setInputLanguage(language);
     }
@@ -588,6 +670,37 @@ export class GameTranslatorLogic {
         if (apiKeyCheck.missing) {
             logger.warn('Translator', `Cannot start translation: ${apiKeyCheck.message}`);
             this.notify(apiKeyCheck.message, 3000, "Please configure your API key in the Translation settings tab.");
+            return false;
+        }
+
+        return true;
+    }
+
+    private canStartOcrTest(): boolean {
+        if (this.ocrProvider === 'legacy_gemini_vision') {
+            this.notify(
+                "OCR-only test unavailable",
+                3000,
+                "Legacy Gemini Vision combines recognition and translation in one request.",
+            );
+            return false;
+        }
+
+        if (!this.getInputLanguage()) {
+            this.notify(
+                "Input language is not set",
+                3000,
+                "Select an input language before testing OCR.",
+            );
+            return false;
+        }
+
+        if (this.ocrProvider === 'googlecloud' && !this.hasGoogleApiKey) {
+            this.notify(
+                "API key required for OCR",
+                3000,
+                "Configure the Google Cloud OCR API key before testing.",
+            );
             return false;
         }
 

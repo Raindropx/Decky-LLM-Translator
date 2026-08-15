@@ -206,7 +206,7 @@ const GameTranslator: VFC<{ logic: GameTranslatorLogic }> = ({ logic }) => {
                         {
                             // @ts-ignore
                             title: <IconLanguage />,
-                            content: <TabTranslation scrollTarget={pendingScrollTarget} onScrolled={() => setPendingScrollTarget(null)} />,
+                            content: <TabTranslation logic={logic} scrollTarget={pendingScrollTarget} onScrolled={() => setPendingScrollTarget(null)} />,
                             id: "translation",
                         },
                         {

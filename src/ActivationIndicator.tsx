@@ -59,7 +59,7 @@ export const ActivationIndicator: VFC<ActivationIndicatorProps> = ({ visible, pr
         <div style={{
             position: "fixed",
             bottom: "20px",
-            left: "20px",
+            right: "20px",
             zIndex: 8003,
             display: "flex",
             flexDirection: "row",

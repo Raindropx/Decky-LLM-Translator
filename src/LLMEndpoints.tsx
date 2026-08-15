@@ -12,7 +12,8 @@ import {
     showModal,
 } from '@decky/ui';
 import { VFC, useCallback, useEffect, useState } from 'react';
-import { HiEye, HiPencil, HiPlus, HiTrash } from 'react-icons/hi2';
+import { HiDocumentDuplicate, HiEye, HiPencil, HiPlus, HiTrash } from 'react-icons/hi2';
+import { ApiKeyTransferHint } from './ApiKeyTransferHint';
 import { useSettings } from './SettingsContext';
 
 export interface LLMEndpoint {
@@ -31,6 +32,12 @@ export interface LLMEndpoint {
 interface EndpointResponse {
     endpoints: LLMEndpoint[];
     selectedEndpointId: string;
+}
+
+interface EndpointMutationResponse {
+    ok: boolean;
+    endpoint?: LLMEndpoint;
+    message?: string;
 }
 
 const EndpointEditorModal: VFC<{
@@ -92,9 +99,10 @@ const EndpointEditorModal: VFC<{
                     bShowClearAction
                     onChange={(e) => setApiKey(e.target.value)}
                 />
+                <ApiKeyTransferHint />
                 <ToggleField
                     label="Send Annotated Screenshot"
-                    description="Draw OCR IDs on a reference image and send it to the model"
+                    description="Draw OCR IDs on a reference image and send it to the model. Otherwise, only plain text is sent to the model."
                     checked={visionEnabled}
                     onChange={setVisionEnabled}
                 />
@@ -119,6 +127,8 @@ export const LLMEndpointSection: VFC<{
     const { refreshLlmEndpoints } = useSettings();
     const [endpoints, setEndpoints] = useState<LLMEndpoint[]>([]);
     const [selectedId, setSelectedId] = useState('');
+    const [duplicating, setDuplicating] = useState(false);
+    const [actionError, setActionError] = useState('');
     const selected = endpoints.find((endpoint) => endpoint.id === selectedId);
 
     const refresh = useCallback(async () => {
@@ -147,6 +157,30 @@ export const LLMEndpointSection: VFC<{
         if (!selected) return;
         await call<[string], boolean>('delete_llm_endpoint', selected.id);
         await refresh();
+    };
+
+    const duplicateSelected = async () => {
+        if (!selected || duplicating) return;
+        setDuplicating(true);
+        setActionError('');
+        try {
+            const result = await call<[string], EndpointMutationResponse>(
+                'duplicate_llm_endpoint',
+                selected.id,
+            );
+            if (!result?.ok || !result.endpoint) {
+                setActionError(result?.message || 'Could not copy endpoint');
+                return;
+            }
+            await refresh();
+            openEditor(result.endpoint);
+        } catch (duplicateError) {
+            setActionError(
+                duplicateError instanceof Error ? duplicateError.message : 'Could not copy endpoint',
+            );
+        } finally {
+            setDuplicating(false);
+        }
     };
 
     return (
@@ -185,17 +219,60 @@ export const LLMEndpointSection: VFC<{
                 </PanelSectionRow>
             )}
             <PanelSectionRow>
-                <Focusable style={{ display: 'flex', width: '100%', gap: '8px' }}>
-                    <DialogButton onClick={() => openEditor()} style={{ flex: 1 }}>
-                        <HiPlus /> Add
-                    </DialogButton>
-                    <DialogButton onClick={() => openEditor(selected)} disabled={!selected} style={{ minWidth: '48px' }}>
-                        <HiPencil />
-                    </DialogButton>
-                    <DialogButton onClick={deleteSelected} disabled={!selected} style={{ minWidth: '48px' }}>
-                        <HiTrash />
-                    </DialogButton>
-                </Focusable>
+                <div style={{ width: '100%' }}>
+                    <Focusable
+                        style={{
+                            display: 'grid',
+                            gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
+                            width: '100%',
+                            gap: '8px',
+                            alignItems: 'stretch',
+                        }}
+                    >
+                        <DialogButton
+                            onClick={() => openEditor()}
+                            aria-label="Add endpoint"
+                            style={{ width: '100%', minWidth: 0, height: '48px', padding: 0 }}
+                        >
+                            <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
+                                <HiPlus />
+                            </span>
+                        </DialogButton>
+                        <DialogButton
+                            onClick={duplicateSelected}
+                            disabled={!selected || duplicating}
+                            aria-label="Copy selected endpoint"
+                            style={{ width: '100%', minWidth: 0, height: '48px', padding: 0 }}
+                        >
+                            <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
+                                <HiDocumentDuplicate />
+                            </span>
+                        </DialogButton>
+                        <DialogButton
+                            onClick={() => openEditor(selected)}
+                            disabled={!selected}
+                            style={{ width: '100%', minWidth: 0, height: '48px', padding: 0 }}
+                        >
+                            <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
+                                <HiPencil />
+                            </span>
+                        </DialogButton>
+                        <DialogButton
+                            onClick={deleteSelected}
+                            disabled={!selected}
+                            style={{ width: '100%', minWidth: 0, height: '48px', padding: 0 }}
+                        >
+                            <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
+                                <HiTrash />
+                            </span>
+                        </DialogButton>
+                    </Focusable>
+                    {actionError && (
+                        <div style={{ color: '#ff6b6b', fontSize: '12px', marginTop: '6px' }}>
+                            {actionError}
+                        </div>
+                    )}
+                </div>
             </PanelSectionRow>
             {!endpoints.length && (
                 <PanelSectionRow>

@@ -1,4 +1,5 @@
 import {
+    ButtonItem,
     DialogButton,
     Dropdown,
     DropdownItem,
@@ -7,6 +8,7 @@ import {
     ModalRoot,
     PanelSection,
     PanelSectionRow,
+    Router,
     SliderField,
     TextField,
     ToggleField,
@@ -15,10 +17,13 @@ import {
 import { call } from '@decky/api';
 import { VFC, useCallback, useEffect, useRef, useState } from 'react';
 import { BsStars } from 'react-icons/bs';
-import { HiInboxArrowDown, HiKey, HiTrash } from 'react-icons/hi2';
+import { HiInboxArrowDown, HiKey, HiMagnifyingGlass, HiTrash } from 'react-icons/hi2';
 
+import { ApiKeyTransferHint } from '../ApiKeyTransferHint';
 import { LLMEndpointSection } from '../LLMEndpoints';
+import { logger } from '../Logger';
 import { useSettings } from '../SettingsContext';
+import { GameTranslatorLogic } from '../Translator';
 
 const languageOptions = [
     { label: '🌐 Auto-detect', data: 'auto' },
@@ -89,6 +94,7 @@ const ApiKeyModal: VFC<{
                     bShowClearAction
                     onChange={(event) => setKey(event.target.value)}
                 />
+                <ApiKeyTransferHint />
                 <Focusable style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '18px' }}>
                     <DialogButton onClick={closeModal}>Cancel</DialogButton>
                     <DialogButton onClick={() => { onSave(key.trim()); closeModal?.(); }} disabled={!key.trim()}>
@@ -149,11 +155,12 @@ const OcrModelAction: VFC<{
 };
 
 interface TabTranslationProps {
+    logic: GameTranslatorLogic;
     scrollTarget?: string | null;
     onScrolled?: () => void;
 }
 
-export const TabTranslation: VFC<TabTranslationProps> = ({ scrollTarget, onScrolled }) => {
+export const TabTranslation: VFC<TabTranslationProps> = ({ logic, scrollTarget, onScrolled }) => {
     const { settings, updateSetting } = useSettings();
     const chromeActionRef = useRef<HTMLDivElement>(null);
     const rapidActionRef = useRef<HTMLDivElement>(null);
@@ -199,6 +206,15 @@ export const TabTranslation: VFC<TabTranslationProps> = ({ scrollTarget, onScrol
             onSave={(key) => updateSetting('geminiApiKey', key, 'Legacy Gemini API key')}
         />
     );
+
+    const runOcrTest = () => {
+        Router.CloseSideMenus();
+        setTimeout(() => {
+            logic.takeScreenshotAndTestOcr().catch(error => {
+                logger.error('TabTranslation', 'OCR test failed', error);
+            });
+        }, 200);
+    };
 
     return (
         <div style={{ paddingBottom: '40px' }}>
@@ -333,6 +349,22 @@ export const TabTranslation: VFC<TabTranslationProps> = ({ scrollTarget, onScrol
                         </PanelSectionRow>
                     </>
                 )}
+
+                <PanelSectionRow>
+                    <ButtonItem
+                        layout="below"
+                        label="OCR Test"
+                        description={legacyMode
+                            ? "Unavailable because Legacy Gemini Vision combines recognition and translation"
+                            : "Capture the current game and show recognized text without calling the translation endpoint"}
+                        disabled={!settings.enabled || legacyMode}
+                        onClick={runOcrTest}
+                    >
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '7px' }}>
+                            <HiMagnifyingGlass /> Test OCR
+                        </span>
+                    </ButtonItem>
+                </PanelSectionRow>
             </PanelSection>
 
             <LLMEndpointSection legacyMode={legacyMode} />

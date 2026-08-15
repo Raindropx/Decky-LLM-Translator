@@ -92,6 +92,7 @@ import requests
 
 # Import provider system
 from providers import ProviderManager, TextRegion, NetworkError, ApiKeyError, RateLimitError
+from providers.llm_endpoint_utils import next_endpoint_copy_name
 from providers.llm_translation import (
     LLMConfigurationError,
     LLMResponseError,
@@ -1612,6 +1613,48 @@ class Plugin:
                 item for item in self._public_llm_endpoints() if item["id"] == endpoint_id
             )}
         except (LLMConfigurationError, TypeError) as exc:
+            return {"ok": False, "error": "invalid_endpoint", "message": str(exc)}
+
+    async def duplicate_llm_endpoint(self, endpoint_id):
+        endpoint_id = str(endpoint_id or "")
+        source = next(
+            (item for item in self._llm_endpoints if item.get("id") == endpoint_id),
+            None,
+        )
+        if not source:
+            return {
+                "ok": False,
+                "error": "endpoint_not_found",
+                "message": "The endpoint to copy no longer exists",
+            }
+
+        try:
+            existing_ids = {str(item.get("id") or "") for item in self._llm_endpoints}
+            duplicate_id = secrets.token_urlsafe(12)
+            while duplicate_id in existing_ids:
+                duplicate_id = secrets.token_urlsafe(12)
+
+            duplicate = dict(source)
+            duplicate["id"] = duplicate_id
+            duplicate["name"] = next_endpoint_copy_name(
+                str(source.get("name") or "Endpoint"),
+                (str(item.get("name") or "") for item in self._llm_endpoints),
+            )
+            normalized = self._normalize_llm_endpoint(duplicate, duplicate_id)
+            self._llm_endpoints = [*self._llm_endpoints, normalized]
+
+            source_secret = self._llm_endpoint_secrets.get(endpoint_id)
+            if source_secret:
+                self._llm_endpoint_secrets[duplicate_id] = source_secret
+
+            self._settings.set_setting("llm_endpoints", self._llm_endpoints)
+            self._settings.set_setting("llm_endpoint_secrets", self._llm_endpoint_secrets)
+            public_duplicate = next(
+                item for item in self._public_llm_endpoints()
+                if item["id"] == duplicate_id
+            )
+            return {"ok": True, "endpoint": public_duplicate}
+        except (LLMConfigurationError, TypeError, ValueError) as exc:
             return {"ok": False, "error": "invalid_endpoint", "message": str(exc)}
 
     async def delete_llm_endpoint(self, endpoint_id):
