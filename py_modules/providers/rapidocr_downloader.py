@@ -1,5 +1,5 @@
 # Fetches RapidOCR ONNX models + dicts from upstream sources.
-# Threading and progress shape mirror NLLBDownloader so the UI treats all three downloaders alike.
+# Threaded downloader with a UI-friendly progress shape.
 
 import logging
 import os

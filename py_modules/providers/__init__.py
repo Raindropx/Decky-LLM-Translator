@@ -8,7 +8,6 @@ from typing import List, Optional
 
 from .base import (
     OCRProvider,
-    TranslationProvider,
     ProviderType,
     TextRegion,
     NetworkError,
@@ -16,14 +15,10 @@ from .base import (
     RateLimitError,
 )
 from .google_ocr import GoogleVisionProvider
-from .google_translate import GoogleTranslateProvider
 from .ocrspace import OCRSpaceProvider
-from .free_translate import FreeTranslateProvider
 from .rapidocr_provider import RapidOCRProvider
 from .chromescreenai_provider import ChromeScreenAIProvider
-from .gemini_vision import GeminiVisionProvider
-from .ct2_translate import CT2TranslateProvider
-from .nllb_downloader import NLLBDownloader
+from .gemini_vision import LegacyGeminiVisionProvider
 from .screenai_downloader import ScreenAIDownloader
 from .rapidocr_downloader import RapidOCRDownloader
 
@@ -31,27 +26,21 @@ logger = logging.getLogger(__name__)
 
 _REACHABILITY_TTL = 4.0
 
-_WEB_OCR_PROVIDERS = {"gemini_vision", "googlecloud", "ocrspace"}
-_WEB_TRANSLATION_PROVIDERS = {"googlecloud", "freegoogle"}
+_WEB_OCR_PROVIDERS = {"legacy_gemini_vision", "googlecloud", "ocrspace"}
 
 # Export all public classes
 __all__ = [
     'OCRProvider',
-    'TranslationProvider',
     'ProviderType',
     'TextRegion',
     'NetworkError',
     'ApiKeyError',
     'RateLimitError',
     'GoogleVisionProvider',
-    'GoogleTranslateProvider',
     'OCRSpaceProvider',
-    'FreeTranslateProvider',
     'RapidOCRProvider',
     'ChromeScreenAIProvider',
-    'GeminiVisionProvider',
-    'CT2TranslateProvider',
-    'NLLBDownloader',
+    'LegacyGeminiVisionProvider',
     'ScreenAIDownloader',
     'RapidOCRDownloader',
     'ProviderManager',
@@ -59,13 +48,12 @@ __all__ = [
 
 
 class ProviderManager:
-    """Factory and manager for OCR and Translation providers."""
+    """Factory and manager for OCR providers."""
 
     def __init__(self):
         """Initialize the provider manager."""
         # Provider instances (created on demand)
         self._ocr_providers = {}
-        self._translation_providers = {}
 
         # Configuration
         self._use_free_providers = True  # Default to free providers
@@ -73,18 +61,12 @@ class ProviderManager:
         self._gemini_api_key = ""
         self._gemini_model = "gemini-2.5-flash"
         self._gemini_target_language = "en"
-        self._ocr_provider_preference = "chromescreenai"  # "rapidocr", "ocrspace", "googlecloud", "gemini_vision", or "chromescreenai"
-        self._translation_provider_preference = "freegoogle"  # "freegoogle", "googlecloud", or "ct2"
+        self._ocr_provider_preference = "chromescreenai"  # Includes legacy_gemini_vision as an explicit combined mode
         self._rapidocr_confidence = 0.5  # Default RapidOCR confidence threshold (0.0-1.0)
         self._rapidocr_box_thresh = 0.5  # Default RapidOCR box detection threshold (0.0-1.0)
         self._rapidocr_unclip_ratio = 1.6  # Default RapidOCR box expansion ratio (1.0-3.0)
         self._rapidocr_persistent_mode = False  # Keep worker alive between requests
         self._chromescreenai_persistent_mode = False  # Same for Chrome Screen AI
-        self._ct2_persistent_mode = False  # Same for CT2/NLLB translation
-
-        # CT2 translation
-        self._ct2_models_dir = None
-        self._model_manager = None
 
         # Created on first configure() that supplies screenai_models_dir.
         self._screenai_downloader: Optional[ScreenAIDownloader] = None
@@ -103,8 +85,6 @@ class ProviderManager:
         google_api_key: str = "",
         gemini_api_key: str = "",
         ocr_provider: str = "",
-        translation_provider: str = "",
-        ct2_models_dir: str = "",
         screenai_models_dir: str = "",
         rapidocr_models_dir: str = "",
     ) -> None:
@@ -112,18 +92,10 @@ class ProviderManager:
         Configure provider preferences.
 
         Args:
-            use_free_providers: If True, use OCR.space + free Google Translate.
-                                If False, use Google Cloud APIs (requires API key).
-                                (Deprecated: use ocr_provider and translation_provider instead)
+            use_free_providers: Deprecated OCR-provider compatibility flag.
             google_api_key: Google Cloud API key (only needed for googlecloud providers)
-            ocr_provider: OCR provider preference - "rapidocr", "ocrspace", "googlecloud", "gemini_vision", or "chromescreenai"
-            translation_provider: Translation provider preference - "freegoogle", "googlecloud", or "ct2"
-            ct2_models_dir: Directory for CT2 translation model storage
+            ocr_provider: OCR provider preference, including legacy_gemini_vision
         """
-        if ct2_models_dir:
-            self._ct2_models_dir = ct2_models_dir
-            if not self._model_manager:
-                self._model_manager = NLLBDownloader(ct2_models_dir)
         if screenai_models_dir and not self._screenai_downloader:
             self._screenai_downloader = ScreenAIDownloader(screenai_models_dir)
         if rapidocr_models_dir and not self._rapidocr_downloader:
@@ -141,37 +113,23 @@ class ProviderManager:
             self._use_free_providers = use_free_providers
             self._ocr_provider_preference = "chromescreenai" if use_free_providers else "googlecloud"
 
-        # Handle translation_provider setting
-        if translation_provider:
-            self._translation_provider_preference = translation_provider
-        elif not translation_provider and ocr_provider:
-            # Backwards compatibility: if only ocr_provider is set, derive translation from it
-            # googlecloud OCR -> googlecloud translation, others -> freegoogle
-            self._translation_provider_preference = "googlecloud" if ocr_provider == "googlecloud" else "freegoogle"
-        elif not use_free_providers:
-            # Legacy: use_free_providers=False means Google Cloud for both
-            self._translation_provider_preference = "googlecloud"
-
         # Update Google Cloud providers with new API key
         if ProviderType.GOOGLE in self._ocr_providers:
             self._ocr_providers[ProviderType.GOOGLE].set_api_key(google_api_key)
-        if ProviderType.GOOGLE in self._translation_providers:
-            self._translation_providers[ProviderType.GOOGLE].set_api_key(google_api_key)
 
-        # Update Gemini Vision provider with new API key
-        if ProviderType.GEMINI_VISION in self._ocr_providers:
-            self._ocr_providers[ProviderType.GEMINI_VISION].set_api_key(gemini_api_key)
+        # Update the retained legacy Gemini provider with the new API key.
+        if ProviderType.LEGACY_GEMINI_VISION in self._ocr_providers:
+            self._ocr_providers[ProviderType.LEGACY_GEMINI_VISION].set_api_key(gemini_api_key)
 
         logger.debug(
             f"Provider config updated: ocr_provider={self._ocr_provider_preference}, "
-            f"translation_provider={self._translation_provider_preference}, "
             f"google_api_key_set={bool(google_api_key)}"
         )
 
     def set_gemini_target_language(self, target_lang: str) -> None:
-        """Update the Gemini Vision provider's target language before each OCR call."""
+        """Update the legacy Gemini provider's target language before each OCR call."""
         self._gemini_target_language = target_lang
-        gemini = self._ocr_providers.get(ProviderType.GEMINI_VISION)
+        gemini = self._ocr_providers.get(ProviderType.LEGACY_GEMINI_VISION)
         if gemini:
             gemini.set_target_language(target_lang)
 
@@ -180,7 +138,7 @@ class ProviderManager:
         if self._gemini_model != model:
             self._gemini_model = model
             # Remove cached provider so it gets recreated with the new model
-            self._ocr_providers.pop(ProviderType.GEMINI_VISION, None)
+            self._ocr_providers.pop(ProviderType.LEGACY_GEMINI_VISION, None)
 
     def set_rapidocr_confidence(self, confidence: float) -> None:
         """
@@ -284,37 +242,6 @@ class ProviderManager:
         if provider:
             provider.set_persistent_mode(True)
 
-    def set_ct2_persistent_mode(
-        self, enabled: bool, apply_to_provider: bool = True
-    ) -> None:
-        self._ct2_persistent_mode = bool(enabled)
-        if not apply_to_provider:
-            logger.debug(
-                f"CT2 persistent_mode preference: {self._ct2_persistent_mode} (not applied)"
-            )
-            return
-        if self._ct2_persistent_mode and self._translation_provider_preference == "ct2":
-            provider = self.get_translation_provider(ProviderType.CT2)
-        else:
-            provider = self._translation_providers.get(ProviderType.CT2)
-        if provider:
-            provider.set_persistent_mode(self._ct2_persistent_mode)
-        logger.debug(f"CT2 persistent_mode set to {self._ct2_persistent_mode}")
-
-    def stop_ct2_worker(self) -> None:
-        provider = self._translation_providers.get(ProviderType.CT2)
-        if provider:
-            provider.set_persistent_mode(False)
-
-    def resume_ct2_worker(self) -> None:
-        if not self._ct2_persistent_mode:
-            return
-        if self._translation_provider_preference != "ct2":
-            return
-        provider = self.get_translation_provider(ProviderType.CT2)
-        if provider:
-            provider.set_persistent_mode(True)
-
     def get_ocr_provider(
         self,
         provider_type: Optional[ProviderType] = None
@@ -334,8 +261,8 @@ class ProviderManager:
                 provider_type = ProviderType.RAPIDOCR
             elif self._ocr_provider_preference == "ocrspace":
                 provider_type = ProviderType.OCR_SPACE
-            elif self._ocr_provider_preference == "gemini_vision":
-                provider_type = ProviderType.GEMINI_VISION
+            elif self._ocr_provider_preference == "legacy_gemini_vision":
+                provider_type = ProviderType.LEGACY_GEMINI_VISION
             elif self._ocr_provider_preference == "chromescreenai":
                 provider_type = ProviderType.CHROME_SCREEN_AI
             else:  # "googlecloud"
@@ -362,8 +289,8 @@ class ProviderManager:
                 self._ocr_providers[provider_type] = GoogleVisionProvider(
                     self._google_api_key
                 )
-            elif provider_type == ProviderType.GEMINI_VISION:
-                provider = GeminiVisionProvider(
+            elif provider_type == ProviderType.LEGACY_GEMINI_VISION:
+                provider = LegacyGeminiVisionProvider(
                     api_key=self._gemini_api_key,
                     model=self._gemini_model,
                 )
@@ -377,46 +304,6 @@ class ProviderManager:
                 self._ocr_providers[provider_type] = provider
 
         return self._ocr_providers.get(provider_type)
-
-    def get_translation_provider(
-        self,
-        provider_type: Optional[ProviderType] = None
-    ) -> Optional[TranslationProvider]:
-        """
-        Get translation provider, creating if necessary.
-
-        Args:
-            provider_type: Specific provider type, or None for default based on preference
-
-        Returns:
-            TranslationProvider instance or None
-        """
-        if provider_type is None:
-            # Use translation provider preference (independent of OCR choice)
-            if self._translation_provider_preference == "googlecloud":
-                provider_type = ProviderType.GOOGLE
-            elif self._translation_provider_preference == "ct2":
-                provider_type = ProviderType.CT2
-            else:
-                provider_type = ProviderType.FREE_GOOGLE
-
-        if provider_type not in self._translation_providers:
-            if provider_type == ProviderType.FREE_GOOGLE:
-                self._translation_providers[provider_type] = FreeTranslateProvider()
-            elif provider_type == ProviderType.GOOGLE:
-                self._translation_providers[provider_type] = GoogleTranslateProvider(
-                    self._google_api_key
-                )
-            elif provider_type == ProviderType.CT2:
-                if self._model_manager:
-                    provider = CT2TranslateProvider(
-                        model_manager=self._model_manager
-                    )
-                    if self._ct2_persistent_mode:
-                        provider.set_persistent_mode(True)
-                    self._translation_providers[provider_type] = provider
-
-        return self._translation_providers.get(provider_type)
 
     async def recognize_text(
         self,
@@ -442,35 +329,6 @@ class ProviderManager:
         logger.warning("No OCR provider available")
         return []
 
-    async def translate_text(
-        self,
-        texts: List[str],
-        source_lang: str,
-        target_lang: str
-    ) -> List[str]:
-        """
-        Perform translation with automatic provider selection.
-
-        Args:
-            texts: List of texts to translate
-            source_lang: Source language code
-            target_lang: Target language code
-
-        Returns:
-            List of translated texts
-        """
-        if not texts:
-            return []
-
-        provider = self.get_translation_provider()
-        if provider and provider.is_available(source_lang, target_lang):
-            provider_name = provider.name
-            logger.debug(f"Using {provider_name} for translation")
-            return await provider.translate_batch(texts, source_lang, target_lang)
-
-        logger.warning("No translation provider available")
-        return texts  # Return original texts as fallback
-
     def get_provider_status(self) -> dict:
         """
         Get current provider configuration and availability status.
@@ -479,18 +337,13 @@ class ProviderManager:
             Dictionary with provider status information
         """
         ocr_provider = self.get_ocr_provider()
-        trans_provider = self.get_translation_provider()
-
         status = {
             "use_free_providers": self._use_free_providers,
             "ocr_provider_preference": self._ocr_provider_preference,
-            "translation_provider_preference": self._translation_provider_preference,
             "google_api_configured": bool(self._google_api_key),
             "gemini_api_configured": bool(self._gemini_api_key),
             "ocr_provider": ocr_provider.name if ocr_provider else "None",
-            "translation_provider": trans_provider.name if trans_provider else "None",
             "ocr_available": ocr_provider.is_available() if ocr_provider else False,
-            "translation_available": trans_provider.is_available("auto", "en") if trans_provider else False,
         }
 
         # Add OCR.space usage stats if using ocrspace (OCR.space) provider
@@ -517,13 +370,8 @@ class ProviderManager:
         status["rapidocr_info"] = rapidocr.get_rapidocr_info()
         status["rapidocr_error"] = rapidocr.get_init_error()
 
-        status["nllb_downloaded"] = self.is_nllb_model_downloaded()
         status["chromescreenai_downloaded"] = self.is_chromescreenai_downloaded()
         status["rapidocr_downloaded"] = self.is_rapidocr_models_downloaded()
-
-        nllb_dl = self._model_manager.get_download_status() if self._model_manager else {}
-        status["nllb_downloading"] = bool(nllb_dl.get("downloading"))
-        status["nllb_progress"] = float(nllb_dl.get("progress") or 0)
 
         scai_dl = self._screenai_downloader.get_status() if self._screenai_downloader else {}
         status["chromescreenai_downloading"] = bool(scai_dl.get("downloading"))
@@ -538,13 +386,11 @@ class ProviderManager:
     async def check_web_reachability(self) -> dict:
         """Probe reachability of the currently selected web providers."""
         ocr_pref = self._ocr_provider_preference
-        trans_pref = self._translation_provider_preference
-
         result = {"ocr": None, "translation": None, "checked_at": time.time()}
 
-        # gemini_vision is a combined OCR+translation call; probe once and mirror
-        if ocr_pref == "gemini_vision":
-            r = await self._probe_cached("gemini_vision", "ocr", self._gemini_api_key)
+        # The legacy Gemini mode is a combined OCR+translation call; probe once.
+        if ocr_pref == "legacy_gemini_vision":
+            r = await self._probe_cached("legacy_gemini_vision", "ocr", self._gemini_api_key)
             result["ocr"] = r
             result["translation"] = r
             return result
@@ -552,10 +398,6 @@ class ProviderManager:
         if ocr_pref in _WEB_OCR_PROVIDERS:
             key = self._google_api_key if ocr_pref == "googlecloud" else ""
             result["ocr"] = await self._probe_cached(ocr_pref, "ocr", key)
-
-        if trans_pref in _WEB_TRANSLATION_PROVIDERS:
-            key = self._google_api_key if trans_pref == "googlecloud" else ""
-            result["translation"] = await self._probe_cached(trans_pref, "translation", key)
 
         return result
 
@@ -574,16 +416,12 @@ class ProviderManager:
 
     async def _probe_provider(self, provider: str, kind: str) -> tuple:
         try:
-            if provider == "gemini_vision":
-                p = self.get_ocr_provider(ProviderType.GEMINI_VISION)
+            if provider == "legacy_gemini_vision":
+                p = self.get_ocr_provider(ProviderType.LEGACY_GEMINI_VISION)
             elif provider == "googlecloud" and kind == "ocr":
                 p = self.get_ocr_provider(ProviderType.GOOGLE)
-            elif provider == "googlecloud" and kind == "translation":
-                p = self.get_translation_provider(ProviderType.GOOGLE)
             elif provider == "ocrspace":
                 p = self.get_ocr_provider(ProviderType.OCR_SPACE)
-            elif provider == "freegoogle":
-                p = self.get_translation_provider(ProviderType.FREE_GOOGLE)
             else:
                 return False, f"Unknown provider ({provider})"
 
@@ -594,48 +432,6 @@ class ProviderManager:
         except Exception as e:
             logger.warning(f"Reachability probe failed for {provider}/{kind}: {e}")
             return False, f"Probe failed: {type(e).__name__}"
-
-    # -- NLLB model management --
-
-    def is_nllb_model_downloaded(self):
-        if self._model_manager:
-            return self._model_manager.is_model_downloaded()
-        return False
-
-    def get_nllb_model_status(self):
-        if not self._model_manager:
-            return {"downloaded": False, "size": 0, "downloading": False, "progress": 0, "error": None}
-        dl_status = self._model_manager.get_download_status()
-        return {
-            "downloaded": self._model_manager.is_model_downloaded(),
-            "size": self._model_manager.get_model_size(),
-            "approx_size_mb": self._model_manager.get_approx_size_mb(),
-            "downloading": dl_status["downloading"],
-            "progress": dl_status["progress"],
-            "error": dl_status["error"],
-        }
-
-    def download_nllb_model(self):
-        if self._model_manager:
-            return self._model_manager.start_download()
-        return False
-
-    def delete_nllb_model(self):
-        if not self._model_manager:
-            return False
-        ct2 = self._translation_providers.get(ProviderType.CT2)
-        if ct2 and hasattr(ct2, '_loaded_model_dir'):
-            if ct2._loaded_model_dir == self._model_manager.get_model_dir():
-                ct2.unload_current_model()
-        return self._model_manager.delete_model()
-
-    def cancel_nllb_download(self):
-        if self._model_manager:
-            self._model_manager.cancel_download()
-
-    def clear_nllb_download_error(self):
-        if self._model_manager:
-            self._model_manager.clear_download_error()
 
     # -- Chrome Screen AI download management --
 
@@ -714,9 +510,6 @@ class ProviderManager:
         return self._rapidocr_downloader.delete()
 
     def shutdown(self):
-        ct2 = self._translation_providers.get(ProviderType.CT2)
-        if ct2 and hasattr(ct2, 'shutdown'):
-            ct2.shutdown()
         rapidocr = self._ocr_providers.get(ProviderType.RAPIDOCR)
         if rapidocr and hasattr(rapidocr, 'stop_worker'):
             rapidocr.stop_worker()

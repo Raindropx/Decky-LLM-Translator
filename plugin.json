@@ -1,11 +1,11 @@
 {
-  "name": "Decky Translator",
-  "author": "cat-in-a-box",
+  "name": "Decky LLM Translator",
+  "author": "Raindropx",
   "api_version": 1,
   "flags": [],
   "publish": {
     "tags": ["Translation"],
-    "description": "Translate anything on your screen to your language",
-    "image": "https://raw.githubusercontent.com/cat-in-a-box/Decky-Translator/main/assets/store-image.png"
+    "description": "Translate on-screen game text with configurable LLM endpoints",
+    "image": "https://raw.githubusercontent.com/Raindropx/Decky-LLM-Translator/main/assets/store-image.png"
   }
 }

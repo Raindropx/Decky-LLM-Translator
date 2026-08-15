@@ -97,11 +97,9 @@ const GameTranslator: VFC<{ logic: GameTranslatorLogic }> = ({ logic }) => {
     const probeReachability = useCallback(async () => {
         const s = settingsRef.current;
         if (currentTabRouteRef.current !== 'main' || !s?.enabled) return;
-        const webOcr = new Set(['gemini_vision', 'googlecloud', 'ocrspace']);
-        const webTrans = new Set(['freegoogle', 'googlecloud']);
+        const webOcr = new Set(['legacy_gemini_vision', 'googlecloud', 'ocrspace']);
         const probeOcr = webOcr.has(s.ocrProvider);
-        const probeTrans = s.ocrProvider !== 'gemini_vision' && webTrans.has(s.translationProvider);
-        if (!probeOcr && !probeTrans) return;
+        if (!probeOcr) return;
 
         try {
             const reach = await call<[], any>('check_web_reachability');
@@ -140,7 +138,7 @@ const GameTranslator: VFC<{ logic: GameTranslatorLogic }> = ({ logic }) => {
 
     useEffect(() => {
         setWebReachability(null);
-    }, [settings.ocrProvider, settings.translationProvider]);
+    }, [settings.ocrProvider]);
 
     // Refresh diagnostics while debug mode is on
     useEffect(() => {
@@ -179,19 +177,19 @@ const GameTranslator: VFC<{ logic: GameTranslatorLogic }> = ({ logic }) => {
         <>
             <style>
                 {`
-                .decky-translator-tabs > div > div:first-child::before {
+                .decky-llm-translator-tabs > div > div:first-child::before {
                     background: #0D141C;
                     box-shadow: none;
                     backdrop-filter: none;
                 }
-                .decky-translator-tabs [role="tabpanel"] {
+                .decky-llm-translator-tabs [role="tabpanel"] {
                     padding-left: 0 !important;
                     padding-right: 0 !important;
                 }
                 `}
             </style>
 
-            <div className="decky-translator-tabs" style={{ height: "95%", width: "300px", position: "fixed", marginTop: "-12px", overflow: "hidden" }}>
+            <div className="decky-llm-translator-tabs" style={{ height: "95%", width: "300px", position: "fixed", marginTop: "-12px", overflow: "hidden" }}>
                 <Tabs
                     activeTab={currentTabRoute}
                     // @ts-ignore
@@ -326,25 +324,26 @@ export default definePlugin(() => {
     const logic = new GameTranslatorLogic(imageState);
 
     // Add image overlay as a global component
-    routerHook.addGlobalComponent("ImageOverlay", () => (
+    routerHook.addGlobalComponent("DeckyLLMTranslatorImageOverlay", () => (
         <ImageOverlay state={imageState} onDismiss={logic.dismiss}/>
     ));
 
     // Add activation indicator as a global component
-    routerHook.addGlobalComponent("HoldActivationIndicator", () => (
+    routerHook.addGlobalComponent("DeckyLLMTranslatorHoldActivationIndicator", () => (
         <ActivationIndicatorWithSettings logic={logic}/>
     ));
 
     return {
-        title: <div className={staticClasses.Title}>Decky Translator</div>,
+        name: "DeckyLLMTranslator",
+        title: <div className={staticClasses.Title}>Decky LLM Translator</div>,
         content: <TranslatorApp logic={logic}/>,
         icon: <BsTranslate/>,
         onDismount() {
             // Clean up resources
             logic.cleanup();
             cleanupAllFontDOM();
-            routerHook.removeGlobalComponent("ImageOverlay");
-            routerHook.removeGlobalComponent("HoldActivationIndicator");
+            routerHook.removeGlobalComponent("DeckyLLMTranslatorImageOverlay");
+            routerHook.removeGlobalComponent("DeckyLLMTranslatorHoldActivationIndicator");
         },
         alwaysRender: true
     };

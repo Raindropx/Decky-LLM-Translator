@@ -1,5 +1,5 @@
 # providers/gemini_vision.py
-# Gemini Vision provider -- combined OCR + translation in a single API call
+# Legacy Gemini Vision provider -- combined OCR + translation in a single API call
 
 import base64
 import json
@@ -141,9 +141,9 @@ def _validate_region(region: dict) -> bool:
     return all(isinstance(v, (int, float)) for v in box)
 
 
-class GeminiVisionProvider(OCRProvider):
+class LegacyGeminiVisionProvider(OCRProvider):
     """
-    Uses Gemini Vision to detect and translate text in screenshots
+    Retains the upstream Gemini mode that detects boxes and translates in one call.
     in a single API call. Returns TextRegion objects with translated_text set.
     """
 
@@ -160,11 +160,11 @@ class GeminiVisionProvider(OCRProvider):
 
     @property
     def name(self) -> str:
-        return "Gemini Vision"
+        return "Legacy Gemini Vision (Combined)"
 
     @property
     def provider_type(self) -> ProviderType:
-        return ProviderType.GEMINI_VISION
+        return ProviderType.LEGACY_GEMINI_VISION
 
     def is_available(self, language: str = "auto") -> bool:
         return bool(self._api_key)
@@ -353,7 +353,7 @@ class GeminiVisionProvider(OCRProvider):
             ))
 
         logger.info(
-            f"Gemini Vision: {len(text_regions)}/{raw_region_count} valid regions"
+            f"Legacy Gemini Vision: {len(text_regions)}/{raw_region_count} valid regions"
         )
         for i, r in enumerate(text_regions):
             logger.debug(f"  [{i}] '{r.text}' -> '{r.translated_text}' at {r.rect}")

@@ -1,9 +1,10 @@
 // src/SettingsContext.tsx
-import React, { createContext, useContext, useEffect, useReducer } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useReducer } from 'react';
 import { call } from '@decky/api';
 import { GameTranslatorLogic } from './Translator';
 import { InputMode } from './Input';
 import { logger } from './Logger';
+import type { LLMEndpoint } from './LLMEndpoints';
 
 // Define the settings interface
 export interface Settings {
@@ -20,14 +21,11 @@ export interface Settings {
     rapidocrUnclipRatio: number; // RapidOCR box expansion ratio (1.0-3.0)
     rapidocrPersistentMode: boolean; // Keep RapidOCR worker alive between requests
     chromeScreenAiPersistentMode: boolean; // Keep Chrome Screen AI worker alive between requests
-    ct2PersistentMode: boolean; // Keep CT2/NLLB worker alive between requests
     pauseGameOnOverlay: boolean; // Setting to control pausing game when overlay is shown
     quickToggleEnabled: boolean; // Quick toggle overlay with right button in combo modes
-    useFreeProviders: boolean; // Use free providers (OCR.space + free Google Translate) - deprecated, use ocrProvider
-    ocrProvider: 'rapidocr' | 'ocrspace' | 'googlecloud' | 'gemini_vision' | 'chromescreenai'; // OCR provider
-    translationProvider: 'freegoogle' | 'googlecloud' | 'ct2'; // Translation provider
+    ocrProvider: 'rapidocr' | 'ocrspace' | 'googlecloud' | 'legacy_gemini_vision' | 'chromescreenai'; // OCR provider
     googleApiKey: string; // Google Cloud Vision API key for text recognition
-    geminiApiKey: string; // Gemini API key for Gemini Vision (free tier available)
+    geminiApiKey: string; // Write-only key status for the legacy combined Gemini mode
     geminiModel: string; // Gemini model to use
     debugMode: boolean; // Debug mode for verbose console logging
     fontScale: number; // Overlay font scale multiplier for external monitors
@@ -38,7 +36,8 @@ export interface Settings {
     hideIdenticalTranslations: boolean;
     allowLabelGrowth: boolean;
     customRecognitionSettings: boolean;
-    translationCacheEnabled: boolean;
+    llmEndpoints: LLMEndpoint[];
+    selectedLlmEndpointId: string;
 }
 
 // Define action types
@@ -62,14 +61,11 @@ const initialSettings: Settings = {
     rapidocrUnclipRatio: 1.6, // Default RapidOCR box expansion ratio (1.0-3.0)
     rapidocrPersistentMode: false,
     chromeScreenAiPersistentMode: false,
-    ct2PersistentMode: false,
     pauseGameOnOverlay: false, // Default to not pausing game
     quickToggleEnabled: false, // Default to disabled
-    useFreeProviders: true, // Default to free providers (no API key needed) - deprecated
     ocrProvider: "chromescreenai", // Default to chromescreenai (Chrome Screen AI) provider
-    translationProvider: "freegoogle", // Default to free Google Translate
     googleApiKey: "", // Empty by default, only needed for Google Cloud
-    geminiApiKey: "", // Empty by default, needed for Gemini Vision
+    geminiApiKey: "", // Empty by default, needed only for the legacy combined mode
     geminiModel: "gemini-2.5-flash", // Default Gemini model
     debugMode: false, // Debug mode off by default
     fontScale: 1.0,
@@ -80,7 +76,8 @@ const initialSettings: Settings = {
     hideIdenticalTranslations: false,
     allowLabelGrowth: false,
     customRecognitionSettings: false,
-    translationCacheEnabled: true,
+    llmEndpoints: [],
+    selectedLlmEndpointId: '',
 };
 
 // Create the reducer
@@ -101,6 +98,7 @@ function settingsReducer(state: Settings, action: SettingsAction): Settings {
 interface SettingsContextType {
     settings: Settings;
     updateSetting: (key: keyof Settings, value: any, label?: string) => Promise<boolean>;
+    refreshLlmEndpoints: () => Promise<void>;
     initialized: boolean;
 }
 
@@ -117,6 +115,18 @@ export const SettingsProvider: React.FC<SettingsProviderProps> = ({
                                                                       logic
                                                                   }) => {
     const [settings, dispatch] = useReducer(settingsReducer, initialSettings);
+
+    const applyLlmEndpoints = useCallback((endpoints: LLMEndpoint[], selectedId: string) => {
+        dispatch({ type: 'UPDATE_SETTING', key: 'llmEndpoints', value: endpoints });
+        dispatch({ type: 'UPDATE_SETTING', key: 'selectedLlmEndpointId', value: selectedId });
+        const active = endpoints.find((endpoint) => endpoint.id === selectedId);
+        logic.setHasSelectedLLMEndpoint(!!active && active.enabled);
+    }, [logic]);
+
+    const refreshLlmEndpoints = useCallback(async () => {
+        const result = await call<[], { endpoints: LLMEndpoint[]; selectedEndpointId: string }>('get_llm_endpoints');
+        applyLlmEndpoints(result?.endpoints ?? [], result?.selectedEndpointId ?? '');
+    }, [applyLlmEndpoints]);
 
     // Load all settings at once
     const loadAllSettings = async () => {
@@ -139,14 +149,11 @@ export const SettingsProvider: React.FC<SettingsProviderProps> = ({
                     rapidocrUnclipRatio: serverSettings.rapidocr_unclip_ratio ?? 1.6, // RapidOCR unclip ratio (1.0-3.0)
                     rapidocrPersistentMode: serverSettings.rapidocr_persistent_mode ?? false,
                     chromeScreenAiPersistentMode: serverSettings.chromescreenai_persistent_mode ?? false,
-                    ct2PersistentMode: serverSettings.ct2_persistent_mode ?? false,
                     pauseGameOnOverlay: serverSettings.pause_game_on_overlay || false, // Add default if not present
                     quickToggleEnabled: serverSettings.quick_toggle_enabled || false, // Add default if not present
-                    useFreeProviders: serverSettings.use_free_providers !== false, // Default to true (deprecated)
                     ocrProvider: serverSettings.ocr_provider || "chromescreenai", // OCR provider setting
-                    translationProvider: serverSettings.translation_provider || "freegoogle", // Translation provider setting
-                    googleApiKey: serverSettings.google_api_key || "", // Google API key
-                    geminiApiKey: serverSettings.gemini_api_key || "", // Gemini API key
+                    googleApiKey: serverSettings.google_api_key_configured ? "configured" : "",
+                    geminiApiKey: serverSettings.gemini_api_key_configured ? "configured" : "",
                     geminiModel: serverSettings.gemini_model || "gemini-2.5-flash",
                     debugMode: serverSettings.debug_mode || false,
                     fontScale: serverSettings.font_scale ?? 1.0,
@@ -157,7 +164,8 @@ export const SettingsProvider: React.FC<SettingsProviderProps> = ({
                     hideIdenticalTranslations: serverSettings.hide_identical_translations ?? false,
                     allowLabelGrowth: serverSettings.allow_label_growth ?? false,
                     customRecognitionSettings: serverSettings.custom_recognition_settings ?? false,
-                    translationCacheEnabled: serverSettings.translation_cache_enabled ?? true,
+                    llmEndpoints: serverSettings.llm_endpoints ?? [],
+                    selectedLlmEndpointId: serverSettings.selected_llm_endpoint_id ?? '',
                 };
 
                 // Update settings in context
@@ -177,9 +185,12 @@ export const SettingsProvider: React.FC<SettingsProviderProps> = ({
 
                 // Set provider settings for upfront API key validation
                 logic.setOcrProvider(serverSettings.ocr_provider || "chromescreenai");
-                logic.setTranslationProvider(serverSettings.translation_provider || "freegoogle");
-                logic.setHasGoogleApiKey(!!serverSettings.google_api_key);
-                logic.setHasGeminiApiKey(!!serverSettings.gemini_api_key);
+                logic.setHasGoogleApiKey(!!serverSettings.google_api_key_configured);
+                logic.setHasGeminiApiKey(!!serverSettings.gemini_api_key_configured);
+                const activeEndpoint = (serverSettings.llm_endpoints ?? []).find(
+                    (endpoint: LLMEndpoint) => endpoint.id === serverSettings.selected_llm_endpoint_id
+                );
+                logic.setHasSelectedLLMEndpoint(!!activeEndpoint && activeEndpoint.enabled);
 
                 logic.setFontScale(serverSettings.font_scale ?? 1.0);
                 logic.setGroupingPower(serverSettings.grouping_power ?? 0.25);
@@ -205,7 +216,10 @@ export const SettingsProvider: React.FC<SettingsProviderProps> = ({
     const updateSetting = async (key: keyof Settings, value: any, label?: string): Promise<boolean> => {
         try {
             // Update local state
-            dispatch({ type: 'UPDATE_SETTING', key, value });
+            const frontendValue = (key === 'googleApiKey' || key === 'geminiApiKey')
+                ? (value ? 'configured' : '')
+                : value;
+            dispatch({ type: 'UPDATE_SETTING', key, value: frontendValue });
 
             // Map frontend setting key to backend setting key
             const backendKeyMap: Record<keyof Settings, string> = {
@@ -222,12 +236,9 @@ export const SettingsProvider: React.FC<SettingsProviderProps> = ({
                 rapidocrUnclipRatio: 'rapidocr_unclip_ratio',
                 rapidocrPersistentMode: 'rapidocr_persistent_mode',
                 chromeScreenAiPersistentMode: 'chromescreenai_persistent_mode',
-                ct2PersistentMode: 'ct2_persistent_mode',
                 pauseGameOnOverlay: 'pause_game_on_overlay',
                 quickToggleEnabled: 'quick_toggle_enabled',
-                useFreeProviders: 'use_free_providers',
                 ocrProvider: 'ocr_provider',
-                translationProvider: 'translation_provider',
                 googleApiKey: 'google_api_key',
                 geminiApiKey: 'gemini_api_key',
                 geminiModel: 'gemini_model',
@@ -240,7 +251,8 @@ export const SettingsProvider: React.FC<SettingsProviderProps> = ({
                 hideIdenticalTranslations: 'hide_identical_translations',
                 allowLabelGrowth: 'allow_label_growth',
                 customRecognitionSettings: 'custom_recognition_settings',
-                translationCacheEnabled: 'translation_cache_enabled'
+                llmEndpoints: 'llm_endpoints',
+                selectedLlmEndpointId: 'selected_llm_endpoint_id'
             };
 
             // Skip settings that don't need to be saved to backend
@@ -304,9 +316,6 @@ export const SettingsProvider: React.FC<SettingsProviderProps> = ({
                 case 'ocrProvider':
                     logic.setOcrProvider(value);
                     break;
-                case 'translationProvider':
-                    logic.setTranslationProvider(value);
-                    break;
                 case 'googleApiKey':
                     logic.setHasGoogleApiKey(!!value);
                     break;
@@ -341,6 +350,7 @@ export const SettingsProvider: React.FC<SettingsProviderProps> = ({
         <SettingsContext.Provider value={{
             settings,
             updateSetting,
+            refreshLlmEndpoints,
             initialized: settings.initialized
         }}>
             {children}

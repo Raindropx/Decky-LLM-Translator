@@ -1,35 +1,31 @@
-# providers/base.py
-# Abstract base classes for OCR and Translation providers
+"""Shared OCR provider types and errors."""
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
-from typing import List, Dict, Tuple, Optional
+from dataclasses import dataclass
 from enum import Enum
+from typing import Dict, List, Optional
 
 
 class NetworkError(Exception):
     """Raised when a network connection error occurs."""
-    pass
 
 
 class ApiKeyError(Exception):
-    """Raised when the API key is invalid or missing."""
-    pass
+    """Raised when an API key is invalid or missing."""
 
 
 class RateLimitError(Exception):
-    """Raised when API rate limit is exceeded."""
-    pass
+    """Raised when an API rate limit is exceeded."""
 
 
 def classify_google_error(status_code: int, body: str) -> str:
-    """Logging for a non-200 Google API response."""
+    """Return a user-facing description for a Google API error."""
     body = body or ""
-    if 'API_KEY_INVALID' in body or 'API key not valid' in body:
+    if "API_KEY_INVALID" in body or "API key not valid" in body:
         return "Invalid API key"
-    if 'SERVICE_DISABLED' in body or 'has not been used' in body or 'it is disabled' in body:
+    if "SERVICE_DISABLED" in body or "has not been used" in body or "it is disabled" in body:
         return "API not enabled in Cloud project"
-    if 'BILLING_DISABLED' in body or 'billing' in body:
+    if "BILLING_DISABLED" in body or "billing" in body:
         return "Billing not enabled"
     if status_code == 401:
         return "Invalid API key"
@@ -41,39 +37,38 @@ def classify_google_error(status_code: int, body: str) -> str:
 
 
 class ProviderType(Enum):
-    """Enum for available provider types."""
-    GOOGLE = "google"           # Google Cloud (requires API key)
-    OCR_SPACE = "ocrspace"      # OCR.space (free, no key needed)
-    FREE_GOOGLE = "freegoogle"  # Free Google Translate via deep-translator
-    RAPIDOCR = "rapidocr"       # Local RapidOCR via ONNX Runtime (no internet required)
-    GEMINI_VISION = "gemini_vision"  # Gemini Vision (OCR + translation in one step)
-    CT2 = "ct2"                 # CTranslate2 translation
-    CHROME_SCREEN_AI = "chromescreenai"  # Chrome Screen AI
+    """Available OCR provider types."""
+
+    GOOGLE = "google"
+    OCR_SPACE = "ocrspace"
+    RAPIDOCR = "rapidocr"
+    LEGACY_GEMINI_VISION = "legacy_gemini_vision"
+    CHROME_SCREEN_AI = "chromescreenai"
 
 
 @dataclass
 class TextRegion:
-    """Represents a detected text region from OCR."""
+    """A detected OCR region and its local overlay coordinates."""
+
     text: str
-    rect: Dict[str, int]  # left, top, right, bottom
+    rect: Dict[str, int]
     confidence: float = 0.0
     is_dialog: bool = False
-    bg_color: Optional[List[int]] = None  # [R, G, B] average background color
-    translated_text: Optional[str] = None  # Pre-translated text
+    bg_color: Optional[List[int]] = None
+    translated_text: Optional[str] = None
 
     def to_dict(self) -> Dict:
-        """Convert to dictionary for JSON serialization."""
-        d = {
+        result = {
             "text": self.text,
             "rect": self.rect,
             "confidence": self.confidence,
-            "isDialog": self.is_dialog
+            "isDialog": self.is_dialog,
         }
         if self.bg_color is not None:
-            d["bgColor"] = self.bg_color
+            result["bgColor"] = self.bg_color
         if self.translated_text is not None:
-            d["translatedText"] = self.translated_text
-        return d
+            result["translatedText"] = self.translated_text
+        return result
 
 
 class OCRProvider(ABC):
@@ -83,117 +78,20 @@ class OCRProvider(ABC):
     @abstractmethod
     def name(self) -> str:
         """Return the provider name."""
-        pass
 
     @property
     @abstractmethod
     def provider_type(self) -> ProviderType:
         """Return the provider type enum."""
-        pass
 
     @abstractmethod
     async def recognize(self, image_data: bytes, language: str = "auto") -> List[TextRegion]:
-        """
-        Perform OCR on image data and return text regions.
-
-        Args:
-            image_data: Raw image bytes (PNG/JPEG)
-            language: Language code or "auto" for auto-detection
-
-        Returns:
-            List of TextRegion objects with detected text and positions
-        """
-        pass
+        """Recognize text and local coordinates in an image."""
 
     @abstractmethod
     def is_available(self, language: str = "auto") -> bool:
-        """
-        Check if OCR is available for the given language.
-
-        Args:
-            language: Language code to check
-
-        Returns:
-            True if the provider can handle this language
-        """
-        pass
+        """Return whether this provider can handle the requested language."""
 
     @abstractmethod
     def get_supported_languages(self) -> List[str]:
-        """
-        Return list of supported language codes.
-
-        Returns:
-            List of ISO 639-1 language codes
-        """
-        pass
-
-
-class TranslationProvider(ABC):
-    """Abstract base class for translation providers."""
-
-    @property
-    @abstractmethod
-    def name(self) -> str:
-        """Return the provider name."""
-        pass
-
-    @property
-    @abstractmethod
-    def provider_type(self) -> ProviderType:
-        """Return the provider type enum."""
-        pass
-
-    @abstractmethod
-    async def translate(self, text: str, source_lang: str, target_lang: str) -> str:
-        """
-        Translate text from source to target language.
-
-        Args:
-            text: Text to translate
-            source_lang: Source language code (or "auto" for detection)
-            target_lang: Target language code
-
-        Returns:
-            Translated text
-        """
-        pass
-
-    @abstractmethod
-    async def translate_batch(self, texts: List[str], source_lang: str, target_lang: str) -> List[str]:
-        """
-        Translate multiple texts efficiently.
-
-        Args:
-            texts: List of texts to translate
-            source_lang: Source language code
-            target_lang: Target language code
-
-        Returns:
-            List of translated texts
-        """
-        pass
-
-    @abstractmethod
-    def is_available(self, source_lang: str, target_lang: str) -> bool:
-        """
-        Check if translation is available for the language pair.
-
-        Args:
-            source_lang: Source language code
-            target_lang: Target language code
-
-        Returns:
-            True if the provider can handle this language pair
-        """
-        pass
-
-    @abstractmethod
-    def get_supported_languages(self) -> List[str]:
-        """
-        Return list of supported language codes.
-
-        Returns:
-            List of language codes
-        """
-        pass
+        """Return supported language codes."""

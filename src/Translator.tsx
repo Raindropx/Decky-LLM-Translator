@@ -2,7 +2,7 @@
 
 import { call, toaster } from "@decky/api";
 import { Router } from "@decky/ui";
-import { TextRecognizer, NetworkError, ApiKeyError, RateLimitError, ModelNotAvailableError } from "./TextRecognizer";
+import { TextRecognizer, NetworkError, ApiKeyError, RateLimitError, ModelNotAvailableError, LLMError } from "./TextRecognizer";
 import { TextTranslator } from "./TextTranslator";
 import { Input, InputMode, ActionType, ProgressInfo } from "./Input";
 import { ImageState } from "./Overlay";
@@ -30,9 +30,9 @@ export class GameTranslatorLogic {
 
     // Provider settings for upfront validation
     private ocrProvider: string = "rapidocr";
-    private translationProvider: string = "freegoogle";
     private hasGoogleApiKey: boolean = false;
     private hasGeminiApiKey: boolean = false;
+    private hasSelectedLLMEndpoint: boolean = false;
 
     isOverlayVisible(): boolean {
         return this.imageState.isVisible();
@@ -347,7 +347,7 @@ export class GameTranslatorLogic {
 
             this.imageState.startLoading("Processing");
             this.imageState.showImage(result.base64);
-            const recognizingStep = this.ocrProvider === 'gemini_vision'
+            const recognizingStep = this.ocrProvider === 'legacy_gemini_vision'
                 ? "Recognizing and Translating"
                 : "Recognizing";
             this.imageState.updateProcessingStep(recognizingStep, false, this.ocrMethodHint());
@@ -366,7 +366,7 @@ export class GameTranslatorLogic {
                 }
 
                 // Translate text (skips backend call if already translated by OCR provider)
-                let translatedRegions = await this.textTranslator.translateText(textRegions);
+                let translatedRegions = await this.textTranslator.translateText(textRegions, result.base64);
                 if (isCancelled()) {
                     logger.debug('Translator', 'Translation cancelled after translation step');
                     return;
@@ -426,6 +426,9 @@ export class GameTranslatorLogic {
                 setTimeout(() => {
                     this.imageState.hideImage();
                 }, 3000); // 3 seconds delay for rate limit error
+            } else if (error instanceof LLMError) {
+                this.imageState.updateProcessingStep(error.message, true);
+                setTimeout(() => this.imageState.hideImage(), 3000);
             } else {
                 this.imageState.hideImage();
             }
@@ -525,18 +528,8 @@ export class GameTranslatorLogic {
         logger.debug('Translator', `OCR provider set to: ${provider}`);
     }
 
-    setTranslationProvider = (provider: string): void => {
-        this.translationProvider = provider;
-        logger.debug('Translator', `Translation provider set to: ${provider}`);
-    }
-
     private translationMethodHint(): string {
-        const labels: Record<string, string> = {
-            ct2: "On-Device",
-            freegoogle: "Google Translate",
-            googlecloud: "Google Cloud",
-        };
-        return labels[this.translationProvider] || this.translationProvider;
+        return "Selected LLM endpoint";
     }
 
     private ocrMethodHint(): string {
@@ -545,7 +538,7 @@ export class GameTranslatorLogic {
             chromescreenai: "On-Device",
             ocrspace: "OCR.space",
             googlecloud: "Google Cloud",
-            gemini_vision: "Gemini Vision",
+            legacy_gemini_vision: "Legacy Gemini Vision",
         };
         return labels[this.ocrProvider] || this.ocrProvider;
     }
@@ -558,6 +551,10 @@ export class GameTranslatorLogic {
     setHasGeminiApiKey = (hasKey: boolean): void => {
         this.hasGeminiApiKey = hasKey;
         logger.debug('Translator', `Gemini API key available: ${hasKey}`);
+    }
+
+    setHasSelectedLLMEndpoint = (hasEndpoint: boolean): void => {
+        this.hasSelectedLLMEndpoint = hasEndpoint;
     }
 
     // Runs all pre-checks that would prevent a translation from starting.
@@ -599,21 +596,16 @@ export class GameTranslatorLogic {
 
     // Check if the current provider configuration requires an API key that's missing
     private requiresApiKeyButMissing(): { missing: boolean; message: string } {
-        if (this.ocrProvider === 'gemini_vision' && !this.hasGeminiApiKey) {
-            return { missing: true, message: "Gemini API key required for Gemini Vision" };
+        if (this.ocrProvider === 'legacy_gemini_vision' && !this.hasGeminiApiKey) {
+            return { missing: true, message: "Gemini API key required for Legacy Gemini Vision" };
         }
 
         const ocrNeedsKey = this.ocrProvider === 'googlecloud';
-        const translationNeedsKey = this.translationProvider === 'googlecloud';
-
-        if ((ocrNeedsKey || translationNeedsKey) && !this.hasGoogleApiKey) {
-            if (ocrNeedsKey && translationNeedsKey) {
-                return { missing: true, message: "API key required for OCR & Translation" };
-            } else if (ocrNeedsKey) {
-                return { missing: true, message: "API key required for OCR" };
-            } else {
-                return { missing: true, message: "API key required for Translation" };
-            }
+        if (ocrNeedsKey && !this.hasGoogleApiKey) {
+            return { missing: true, message: "API key required for OCR" };
+        }
+        if (this.ocrProvider !== 'legacy_gemini_vision' && !this.hasSelectedLLMEndpoint) {
+            return { missing: true, message: "Select an LLM endpoint" };
         }
         return { missing: false, message: "" };
     }

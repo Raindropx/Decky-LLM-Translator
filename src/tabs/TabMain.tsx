@@ -94,11 +94,9 @@ export const TabMain: VFC<TabMainProps> = ({ logic, overlayVisible, providerStat
         && ((settings.ocrProvider === 'chromescreenai' && !providerStatus.chromescreenai_downloaded)
             || (settings.ocrProvider === 'rapidocr' && !providerStatus.rapidocr_downloaded));
 
-    const translationNeedsDownload =
-        settings.ocrProvider !== 'gemini_vision'
-        && settings.translationProvider === 'ct2'
-        && !!providerStatus
-        && !providerStatus.nllb_downloaded;
+    const selectedEndpoint = settings.llmEndpoints.find(
+        (endpoint) => endpoint.id === settings.selectedLlmEndpointId
+    );
 
     const handleButtonClick = () => {
         if (overlayVisible) {
@@ -109,10 +107,6 @@ export const TabMain: VFC<TabMainProps> = ({ logic, overlayVisible, providerStat
         if (ocrNeedsDownload) {
             const target = settings.ocrProvider === 'rapidocr' ? 'rapidocr-action' : 'chromescreenai-action';
             onNavigateToTab('translation', target);
-            return;
-        }
-        if (translationNeedsDownload) {
-            onNavigateToTab('translation', 'ct2-action');
             return;
         }
         // Close menu first, then wait for UI to fully close before taking screenshot
@@ -126,7 +120,7 @@ export const TabMain: VFC<TabMainProps> = ({ logic, overlayVisible, providerStat
         if (overlayVisible) {
             return <span style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}><BsXLg /> Close Overlay</span>;
         }
-        if (ocrNeedsDownload || translationNeedsDownload) {
+        if (ocrNeedsDownload) {
             return <span style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}><HiInboxArrowDown size={20} /> Download required</span>;
         }
         return <span style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}><BsTranslate /> Translate</span>;
@@ -140,7 +134,7 @@ export const TabMain: VFC<TabMainProps> = ({ logic, overlayVisible, providerStat
                         label={settings.enabled ? "Plugin is enabled" : "Plugin is disabled"}
                         description="Toggle the functionality on or off"
                         checked={settings.enabled}
-                        onChange={(value) => updateSetting('enabled', value, 'Decky Translator')}
+                        onChange={(value) => updateSetting('enabled', value, 'Decky LLM Translator')}
                     />
                 </PanelSectionRow>
 
@@ -158,14 +152,14 @@ export const TabMain: VFC<TabMainProps> = ({ logic, overlayVisible, providerStat
                         {/* Provider Status */}
                         <PanelSectionRow>
                             <div style={{ fontSize: '12px', marginTop: '8px' }}>
-                                {settings.ocrProvider === 'gemini_vision' && (
+                                {settings.ocrProvider === 'legacy_gemini_vision' && (
                                     <div style={{ display: 'flex', alignItems: 'center', marginBottom: '4px' }}>
                                         <BsStars style={{ marginRight: '8px', color: '#aaa' }} />
                                         <span style={{ color: '#888' }}>Recognize + Translate:</span>
-                                        <span style={{ marginLeft: '6px', fontWeight: 'bold' }}>Gemini</span>
+                                        <span style={{ marginLeft: '6px', fontWeight: 'bold' }}>Legacy Gemini Vision</span>
                                     </div>
                                 )}
-                                {settings.ocrProvider !== 'gemini_vision' && (
+                                {settings.ocrProvider !== 'legacy_gemini_vision' && (
                                     <div style={{ display: 'flex', alignItems: 'center', marginBottom: '4px' }}>
                                         <BsEye style={{ marginRight: '8px', color: '#aaa' }} />
                                         <span style={{ color: '#888' }}>Text Recognition:</span>
@@ -314,55 +308,28 @@ export const TabMain: VFC<TabMainProps> = ({ logic, overlayVisible, providerStat
                                         <ReachabilityRow result={webReachability?.ocr} expectedProvider="ocrspace" />
                                     </div>
                                 )}
-                                {settings.ocrProvider !== 'gemini_vision' && (
+                                {settings.ocrProvider !== 'legacy_gemini_vision' && (
                                     <div style={{ display: 'flex', alignItems: 'center', marginBottom: '2px' }}>
                                         <BsTranslate style={{ marginRight: '8px', color: '#aaa' }} />
                                         <span style={{ color: '#888' }}>Translation:</span>
                                         <span style={{ marginLeft: '6px', fontWeight: 'bold' }}>
-                                            {settings.translationProvider === 'googlecloud' ? 'Google Cloud' :
-                                             settings.translationProvider === 'ct2' ? 'On-Device' : 'Google Translate'}
+                                            {selectedEndpoint?.name ?? 'LLM endpoint not configured'}
                                         </span>
                                     </div>
                                 )}
                                 <div style={{ marginLeft: '22px', marginBottom: '6px' }}>
-                                    {settings.ocrProvider === 'gemini_vision' && (
+                                    {settings.ocrProvider === 'legacy_gemini_vision' && (
                                         <>
                                             <div style={{ color: '#666', fontSize: '10px' }}>
                                                 Model: {settings.geminiModel.replace(/^gemini-/, '').split('-').map((w: string) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')}
                                             </div>
-                                            <ReachabilityRow result={webReachability?.ocr} expectedProvider="gemini_vision" />
+                                            <ReachabilityRow result={webReachability?.ocr} expectedProvider="legacy_gemini_vision" />
                                         </>
                                     )}
-                                    {settings.ocrProvider !== 'gemini_vision' && settings.translationProvider === 'freegoogle' && (
-                                        <>
-                                            <div style={{ color: '#666', fontSize: '10px' }}>No API key needed</div>
-                                            <ReachabilityRow result={webReachability?.translation} expectedProvider="freegoogle" />
-                                        </>
-                                    )}
-                                    {settings.ocrProvider !== 'gemini_vision' && settings.translationProvider === 'googlecloud' && (
-                                        <>
-                                            <ReachabilityRow result={webReachability?.translation} expectedProvider="googlecloud" />
-                                        </>
-                                    )}
-                                    {settings.ocrProvider !== 'gemini_vision' && settings.translationProvider === 'ct2' && (
-                                        <>
-                                            {providerStatus?.nllb_downloaded && (
-                                                <div style={{ color: '#666', fontSize: '10px' }}>Model: NLLB-200 1.3B</div>
-                                            )}
-                                            <div style={{ color: '#666', fontSize: '10px', display: 'flex', alignItems: 'center' }}>
-                                                {providerStatus?.nllb_downloading ? (
-                                                    <>
-                                                        <InstallingDot />
-                                                        <span>Installing...</span>
-                                                    </>
-                                                ) : (
-                                                    <>
-                                                        <StatusDot ok={!!providerStatus?.nllb_downloaded} />
-                                                        <span>{providerStatus?.nllb_downloaded ? 'Ready' : 'Not ready (Model not installed)'}</span>
-                                                    </>
-                                                )}
-                                            </div>
-                                        </>
+                                    {settings.ocrProvider !== 'legacy_gemini_vision' && selectedEndpoint && (
+                                        <div style={{ color: '#666', fontSize: '10px' }}>
+                                            {selectedEndpoint.model} · {selectedEndpoint.visionEnabled ? 'Annotated vision' : 'Text only'}
+                                        </div>
                                     )}
                                 </div>
                             </div>

@@ -12,7 +12,7 @@ export enum LogLevel {
 }
 
 class Logger {
-    private readonly appName = 'DeckyTranslator';
+    private readonly appName = 'DeckyLLMTranslator';
     private _enabled = false; // Debug mode off by default
 
     // Color styles for console

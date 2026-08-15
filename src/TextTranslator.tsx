@@ -1,7 +1,7 @@
 // TextTranslator.tsx
 
 import { call } from "@decky/api";
-import { TextRegion, NetworkError, ApiKeyError, RateLimitError, ModelNotAvailableError, ErrorResponse } from "./TextRecognizer";
+import { TextRegion, NetworkError, ApiKeyError, RateLimitError, ModelNotAvailableError, LLMError, ErrorResponse } from "./TextRecognizer";
 import { logger } from "./Logger";
 
 // Type guard to check if response is an error
@@ -39,7 +39,7 @@ export class TextTranslator {
         return this.inputLanguage;
     }
 
-    async translateText(textRegions: TextRegion[]): Promise<TranslatedRegion[]> {
+    async translateText(textRegions: TextRegion[], screenshotData?: string): Promise<TranslatedRegion[]> {
         try {
             // Skip translation if there's nothing to translate
             if (!textRegions.length) {
@@ -47,11 +47,12 @@ export class TextTranslator {
             }
 
             // Call the Python backend method for translation, now including input language
-            const response = await call<[TextRegion[], string, string], TranslatedRegion[] | ErrorResponse>(
+            const response = await call<[TextRegion[], string, string, string?], TranslatedRegion[] | ErrorResponse>(
                 'translate_text',
                 textRegions,
                 this.targetLanguage,
-                this.inputLanguage
+                this.inputLanguage,
+                screenshotData
             );
 
             if (response) {
@@ -74,6 +75,11 @@ export class TextTranslator {
                         logger.error('TextTranslator', `Rate limit error: ${errorResponse.message}`);
                         throw new RateLimitError(errorResponse.message);
                     }
+                    if (errorResponse.error === 'endpoint_not_configured'
+                        || errorResponse.error === 'llm_configuration_error'
+                        || errorResponse.error === 'llm_response_error') {
+                        throw new LLMError(errorResponse.message);
+                    }
                     logger.error('TextTranslator', `Error from backend: ${errorResponse.error} - ${errorResponse.message}`);
                     // Return original text on error
                     return textRegions.map(region => ({
@@ -94,7 +100,7 @@ export class TextTranslator {
             }));
         } catch (error) {
             // Re-throw known errors to be handled by caller
-            if (error instanceof NetworkError || error instanceof ApiKeyError || error instanceof RateLimitError || error instanceof ModelNotAvailableError) {
+            if (error instanceof NetworkError || error instanceof ApiKeyError || error instanceof RateLimitError || error instanceof ModelNotAvailableError || error instanceof LLMError) {
                 throw error;
             }
             logger.error('TextTranslator', 'Text translation error', error);

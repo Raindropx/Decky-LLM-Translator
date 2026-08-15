@@ -34,6 +34,13 @@ export class ModelNotAvailableError extends Error {
     }
 }
 
+export class LLMError extends Error {
+    constructor(message: string) {
+        super(message);
+        this.name = 'LLMError';
+    }
+}
+
 function isErrorResponse(value: unknown): value is ErrorResponse {
     return typeof value === 'object' && value !== null && 'error' in value && 'message' in value;
 }
@@ -446,7 +453,7 @@ export class TextRecognizer {
     }
 
     // Spacing for horizontal (same-line) merging
-    private getHorizontalSpacing(a: TextRegion, b: TextRegion, medianH: number): string {
+    private getHorizontalSpacing(a: TextRegion, b: TextRegion, _medianH: number): string {
         // No space before closing punctuation
         if (/^[.,!?:;)\]"'\u3002\u3001\uFF09\u300D\u300F\u3011\u3009\u300B)]/.test(b.text)) {
             return "";

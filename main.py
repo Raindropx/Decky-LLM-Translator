@@ -13,6 +13,7 @@ import logging
 import re
 import json
 import base64
+import secrets
 import tarfile
 import shutil
 import glob
@@ -55,15 +56,15 @@ def _should_extract_dependencies():
 
 if _should_extract_dependencies():
     try:
-        print(f"[Decky Translator] Extracting dependencies from {DEPENDENCIES_ARCHIVE}...")
+        print(f"[Decky LLM Translator] Extracting dependencies from {DEPENDENCIES_ARCHIVE}...")
         with tarfile.open(DEPENDENCIES_ARCHIVE, "r:gz") as tar:
             tar.extractall(path=BIN_DIR)
         # Create marker file to indicate successful extraction
         with open(EXTRACTION_MARKER, "w") as f:
             f.write(f"Extracted at {datetime.now().isoformat()}\n")
-        print(f"[Decky Translator] Dependencies extracted successfully")
+        print(f"[Decky LLM Translator] Dependencies extracted successfully")
     except Exception as e:
-        print(f"[Decky Translator] Failed to extract dependencies: {e}")
+        print(f"[Decky LLM Translator] Failed to extract dependencies: {e}")
         # Remove marker if it exists, so we retry next time
         if os.path.exists(EXTRACTION_MARKER):
             os.remove(EXTRACTION_MARKER)
@@ -91,15 +92,19 @@ import requests
 
 # Import provider system
 from providers import ProviderManager, TextRegion, NetworkError, ApiKeyError, RateLimitError
-from providers.translation_cache import TranslationCache, PROVIDER_TIERS, normalize
+from providers.llm_translation import (
+    LLMConfigurationError,
+    LLMResponseError,
+    OpenAICompatibleLLMProvider,
+)
 
 _processing_lock = False
 
 SENSITIVE_SETTING_KEYS = {
     "google_api_key",
     "google_vision_api_key",
-    "google_translate_api_key",
     "gemini_api_key",
+    "llm_endpoint_secrets",
 }
 
 
@@ -112,7 +117,9 @@ def _mask_secret(value):
 
 
 def _mask_for_log(key, value):
-    return _mask_secret(value) if key in SENSITIVE_SETTING_KEYS else value
+    if key in SENSITIVE_SETTING_KEYS:
+        return "<redacted>" if value else value
+    return value
 
 
 _API_KEY_JUNK_RE = re.compile(r"[\s\u200b\u200c\u200d\u2060\ufeff]+")
@@ -183,15 +190,15 @@ logger.debug(f"GStreamer plugins path: {GSTPLUGINSPATH}")
 os.makedirs(DECKY_PLUGIN_LOG_DIR, exist_ok=True)
 
 # Set up log files
-std_out_file_path = Path(DECKY_PLUGIN_LOG_DIR) / "decky-translator-std-out.log"
+std_out_file_path = Path(DECKY_PLUGIN_LOG_DIR) / "decky-llm-translator-std-out.log"
 std_out_file = open(std_out_file_path, "w")
-std_err_file = open(Path(DECKY_PLUGIN_LOG_DIR) / "decky-translator-std-err.log", "w")
+std_err_file = open(Path(DECKY_PLUGIN_LOG_DIR) / "decky-llm-translator-std-err.log", "w")
 logger.debug(f"Standard output logs: {std_out_file_path}")
 
 # Set up file logging
 from logging.handlers import TimedRotatingFileHandler
 
-log_file = Path(DECKY_PLUGIN_LOG_DIR) / "decky-translator.log"
+log_file = Path(DECKY_PLUGIN_LOG_DIR) / "decky-llm-translator.log"
 log_file_handler = TimedRotatingFileHandler(log_file, when="midnight", backupCount=2)
 log_file_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
 log_file_handler.addFilter(_url_redact_filter)
@@ -206,7 +213,7 @@ try:
         _plugin_version = json.load(_pkg).get("version", "unknown")
 except Exception as _e:
     _plugin_version = "unknown"
-logger.info(f"Decky Translator v{_plugin_version} starting")
+logger.info(f"Decky LLM Translator v{_plugin_version} starting")
 
 
 import threading
@@ -1063,6 +1070,7 @@ class SettingsManager:
             if os.path.exists(self.settings_path):
                 with open(self.settings_path, 'r') as f:
                     self.settings = json.load(f)
+                os.chmod(self.settings_path, 0o600)
                 logger.debug(f"Settings loaded from {self.settings_path}")
             else:
                 logger.warning(f"Settings file does not exist: {self.settings_path}")
@@ -1076,8 +1084,13 @@ class SettingsManager:
             self.read()
             self.settings[key] = value
             os.makedirs(os.path.dirname(self.settings_path), exist_ok=True)
-            with open(self.settings_path, 'w') as f:
+            temp_path = f"{self.settings_path}.tmp"
+            with open(temp_path, 'w') as f:
                 json.dump(self.settings, f, indent=4)
+                f.flush()
+                os.fsync(f.fileno())
+            os.chmod(temp_path, 0o600)
+            os.replace(temp_path, self.settings_path)
             logger.debug(f"Saved setting {key}={_mask_for_log(key, value)}")
             return True
         except Exception as e:
@@ -1155,7 +1168,7 @@ def get_base64_image(image_path):
 
 class Plugin:
     _filepath: str = None
-    _screenshotPath: str = "/tmp/decky-translator"  # Temporary directory for screenshots (deleted after OCR)
+    _screenshotPath: str = "/tmp/decky-llm-translator"  # Plugin-private temporary screenshots
     _settings = None
     _input_language: str = "auto"  # Default to auto-detect
     _target_language: str = "en"
@@ -1168,7 +1181,6 @@ class Plugin:
     _rapidocr_unclip_ratio: float = 1.6  # RapidOCR box expansion ratio (1.0-3.0)
     _rapidocr_persistent_mode: bool = False  # Keep RapidOCR worker alive between requests
     _chromescreenai_persistent_mode: bool = False  # Keep Chrome Screen AI worker alive between requests
-    _ct2_persistent_mode: bool = False  # Keep CT2/NLLB worker alive between requests
     _pause_game_on_overlay: bool = False  # Default to not pausing game on overlay
     _quick_toggle_enabled: bool = False  # Default to disabled for quick toggle
 
@@ -1181,15 +1193,15 @@ class Plugin:
     _provider_manager: ProviderManager = None
     _use_free_providers: bool = True  # Default to free providers (no API key needed)
     _ocr_provider: str = "chromescreenai"  # "rapidocr" (RapidOCR), "ocrspace" (OCR.space), or "googlecloud" (Google Cloud)
-    _translation_provider: str = "freegoogle"  # "freegoogle" or "googlecloud"
 
-    # Translation cache
-    _translation_cache: TranslationCache = None
-    _translation_cache_enabled: bool = True
+    # LLM endpoint metadata and secrets are deliberately kept in separate
+    # settings keys. Only metadata is ever returned to the frontend.
+    _llm_endpoints: list = []
+    _llm_endpoint_secrets: dict = {}
+    _selected_llm_endpoint_id: str = ""
 
     # OCR API configurations - user must provide their own API key
     _google_vision_api_key: str = ""
-    _google_translate_api_key: str = ""
     _gemini_api_key: str = ""
     _gemini_model: str = "gemini-2.5-flash"
 
@@ -1291,9 +1303,15 @@ class Plugin:
 
     # Generic settings handlers
     async def get_setting(self, key, default=None):
+        if key in SENSITIVE_SETTING_KEYS or key == "llm_endpoints":
+            logger.warning("Blocked frontend read of protected setting: %s", key)
+            return default
         return self._settings.get_setting(key, default)
 
     async def set_setting(self, key, value):
+        if key in {"llm_endpoints", "llm_endpoint_secrets", "selected_llm_endpoint_id"}:
+            logger.warning("Blocked generic write of managed LLM setting: %s", key)
+            return False
         logger.debug(f"Setting {key} to: {_mask_for_log(key, value)}")
         if key in SENSITIVE_SETTING_KEYS and isinstance(value, str):
             cleaned = _clean_api_key(value)
@@ -1318,16 +1336,12 @@ class Plugin:
                             self._provider_manager.resume_rapidocr_worker()
                         if self._chromescreenai_persistent_mode:
                             self._provider_manager.resume_chromescreenai_worker()
-                        if self._ct2_persistent_mode:
-                            self._provider_manager.resume_ct2_worker()
                     else:
                         self._provider_manager.stop_rapidocr_worker()
                         self._provider_manager.stop_chromescreenai_worker()
-                        self._provider_manager.stop_ct2_worker()
             elif key == "google_api_key":
-                # Single API key for both Vision and Translate
+                # Google Cloud is retained only as an OCR provider.
                 self._google_vision_api_key = value
-                self._google_translate_api_key = value
                 # Update provider manager with new API key
                 if self._provider_manager:
                     self._provider_manager.configure(
@@ -1335,7 +1349,6 @@ class Plugin:
                         google_api_key=value,
                         gemini_api_key=self._gemini_api_key,
                         ocr_provider=self._ocr_provider,
-                        translation_provider=self._translation_provider
                     )
             elif key == "google_vision_api_key":
                 self._google_vision_api_key = value
@@ -1346,10 +1359,7 @@ class Plugin:
                         google_api_key=value,
                         gemini_api_key=self._gemini_api_key,
                         ocr_provider=self._ocr_provider,
-                        translation_provider=self._translation_provider
                     )
-            elif key == "google_translate_api_key":
-                self._google_translate_api_key = value
             elif key == "gemini_model":
                 self._gemini_model = value
                 if self._provider_manager:
@@ -1362,7 +1372,6 @@ class Plugin:
                         google_api_key=self._google_vision_api_key,
                         gemini_api_key=value,
                         ocr_provider=self._ocr_provider,
-                        translation_provider=self._translation_provider
                     )
             elif key == "hold_time_translate":
                 self._hold_time_translate = value
@@ -1403,16 +1412,6 @@ class Plugin:
                     )
                     if not plugin_enabled and not self._chromescreenai_persistent_mode:
                         self._provider_manager.stop_chromescreenai_worker()
-            elif key == "ct2_persistent_mode":
-                self._ct2_persistent_mode = bool(value)
-                if self._provider_manager:
-                    plugin_enabled = self._settings.get_setting("enabled", True)
-                    self._provider_manager.set_ct2_persistent_mode(
-                        self._ct2_persistent_mode,
-                        apply_to_provider=plugin_enabled,
-                    )
-                    if not plugin_enabled and not self._ct2_persistent_mode:
-                        self._provider_manager.stop_ct2_worker()
             elif key == "pause_game_on_overlay":
                 self._pause_game_on_overlay = value
             elif key == "quick_toggle_enabled":
@@ -1444,7 +1443,6 @@ class Plugin:
                         google_api_key=self._google_vision_api_key,
                         gemini_api_key=self._gemini_api_key,
                         ocr_provider=self._ocr_provider,
-                        translation_provider=self._translation_provider
                     )
             elif key == "ocr_provider":
                 self._ocr_provider = value
@@ -1457,7 +1455,6 @@ class Plugin:
                         google_api_key=self._google_vision_api_key,
                         gemini_api_key=self._gemini_api_key,
                         ocr_provider=value,
-                        translation_provider=self._translation_provider
                     )
                     # Don't leave the RapidOCR worker running when the user
                     # switches providers; resume it if they switch back.
@@ -1470,24 +1467,6 @@ class Plugin:
                         self._provider_manager.stop_chromescreenai_worker()
                     elif plugin_enabled:
                         self._provider_manager.resume_chromescreenai_worker()
-            elif key == "translation_provider":
-                self._translation_provider = value
-                # Update provider manager configuration
-                if self._provider_manager:
-                    self._provider_manager.configure(
-                        use_free_providers=self._use_free_providers,
-                        google_api_key=self._google_vision_api_key,
-                        gemini_api_key=self._gemini_api_key,
-                        ocr_provider=self._ocr_provider,
-                        translation_provider=value
-                    )
-                    plugin_enabled = self._settings.get_setting("enabled", True)
-                    if value != "ct2":
-                        self._provider_manager.stop_ct2_worker()
-                    elif plugin_enabled:
-                        self._provider_manager.resume_ct2_worker()
-            elif key == "translation_cache_enabled":
-                self._translation_cache_enabled = bool(value)
             else:
                 logger.warning(f"Unknown setting key: {key}")
 
@@ -1506,12 +1485,11 @@ class Plugin:
                 "enabled": self._settings.get_setting("enabled", True),
                 "use_free_providers": self._use_free_providers,
                 "ocr_provider": self._ocr_provider,
-                "translation_provider": self._translation_provider,
-                "google_api_key": self._google_vision_api_key,  # Single key for frontend
-                "google_vision_api_key": self._google_vision_api_key,
-                "google_translate_api_key": self._google_translate_api_key,
-                "gemini_api_key": self._gemini_api_key,
+                "google_api_key_configured": bool(self._google_vision_api_key),
+                "gemini_api_key_configured": bool(self._gemini_api_key),
                 "gemini_model": self._gemini_model,
+                "llm_endpoints": self._public_llm_endpoints(),
+                "selected_llm_endpoint_id": self._selected_llm_endpoint_id,
                 "hold_time_translate": self._settings.get_setting("hold_time_translate", 1000),
                 "hold_time_dismiss": self._settings.get_setting("hold_time_dismiss", 500),
                 "confidence_threshold": self._settings.get_setting("confidence_threshold", 0.6),
@@ -1520,7 +1498,6 @@ class Plugin:
                 "rapidocr_unclip_ratio": self._settings.get_setting("rapidocr_unclip_ratio", 1.6),
                 "rapidocr_persistent_mode": self._settings.get_setting("rapidocr_persistent_mode", False),
                 "chromescreenai_persistent_mode": self._settings.get_setting("chromescreenai_persistent_mode", False),
-                "ct2_persistent_mode": self._settings.get_setting("ct2_persistent_mode", False),
                 "pause_game_on_overlay": self._settings.get_setting("pause_game_on_overlay", False),
                 "quick_toggle_enabled": self._settings.get_setting("quick_toggle_enabled", False),
                 "debug_mode": self._settings.get_setting("debug_mode", False),
@@ -1532,7 +1509,6 @@ class Plugin:
                 "hide_identical_translations": self._settings.get_setting("hide_identical_translations", False),
                 "allow_label_growth": self._settings.get_setting("allow_label_growth", False),
                 "custom_recognition_settings": self._settings.get_setting("custom_recognition_settings", False),
-                "translation_cache_enabled": self._translation_cache_enabled,
             }
             return settings
         except Exception as e:
@@ -1540,16 +1516,141 @@ class Plugin:
             logger.error(traceback.format_exc())
             return {}
 
+    def _public_llm_endpoints(self):
+        result = []
+        for endpoint in self._llm_endpoints:
+            public = dict(endpoint)
+            endpoint_id = str(public.get("id") or "")
+            public["hasApiKey"] = bool(self._llm_endpoint_secrets.get(endpoint_id))
+            result.append(public)
+        return result
+
+    def _normalize_llm_endpoint(self, endpoint, existing_id=""):
+        if not isinstance(endpoint, dict):
+            raise LLMConfigurationError("Endpoint must be an object")
+
+        endpoint_id = str(endpoint.get("id") or existing_id or secrets.token_urlsafe(12))
+        if not re.fullmatch(r"[A-Za-z0-9_-]{8,64}", endpoint_id):
+            raise LLMConfigurationError("Endpoint ID is invalid")
+
+        name = str(endpoint.get("name") or "").strip()
+        base_url = str(endpoint.get("baseUrl") or "").strip().rstrip("/")
+        model = str(endpoint.get("model") or "").strip()
+        if not name or len(name) > 80:
+            raise LLMConfigurationError("Endpoint name is required")
+        if not base_url or len(base_url) > 500:
+            raise LLMConfigurationError("Endpoint Base URL is required")
+        if not model or len(model) > 160:
+            raise LLMConfigurationError("Endpoint model is required")
+
+        parsed = urlparse(base_url)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise LLMConfigurationError("Endpoint URL must use http:// or https://")
+        if parsed.username or parsed.password or parsed.query or parsed.fragment:
+            raise LLMConfigurationError("Endpoint URL cannot contain credentials, a query, or a fragment")
+
+        try:
+            temperature = float(endpoint.get("temperature", 0.2))
+            max_tokens = int(endpoint.get("maxTokens", 2048))
+        except (TypeError, ValueError) as exc:
+            raise LLMConfigurationError("Endpoint numeric settings are invalid") from exc
+        if not 0 <= temperature <= 2:
+            raise LLMConfigurationError("Temperature must be between 0 and 2")
+        if not 64 <= max_tokens <= 8192:
+            raise LLMConfigurationError("Max tokens must be between 64 and 8192")
+
+        return {
+            "id": endpoint_id,
+            "name": name,
+            "provider": "openai-compatible",
+            "baseUrl": base_url,
+            "model": model,
+            "visionEnabled": bool(endpoint.get("visionEnabled", False)),
+            "temperature": temperature,
+            "maxTokens": max_tokens,
+            "enabled": bool(endpoint.get("enabled", True)),
+        }
+
+    async def get_llm_endpoints(self):
+        return {
+            "endpoints": self._public_llm_endpoints(),
+            "selectedEndpointId": self._selected_llm_endpoint_id,
+        }
+
+    async def save_llm_endpoint(self, endpoint):
+        try:
+            requested_id = str(endpoint.get("id") or "") if isinstance(endpoint, dict) else ""
+            existing = next(
+                (item for item in self._llm_endpoints if item.get("id") == requested_id),
+                None,
+            )
+            normalized = self._normalize_llm_endpoint(endpoint, requested_id)
+            endpoint_id = normalized["id"]
+
+            if existing:
+                self._llm_endpoints = [
+                    normalized if item.get("id") == endpoint_id else item
+                    for item in self._llm_endpoints
+                ]
+            else:
+                self._llm_endpoints = [*self._llm_endpoints, normalized]
+
+            if "apiKey" in endpoint:
+                cleaned = _clean_api_key(str(endpoint.get("apiKey") or ""))
+                if cleaned:
+                    self._llm_endpoint_secrets[endpoint_id] = cleaned
+                elif endpoint.get("clearApiKey"):
+                    self._llm_endpoint_secrets.pop(endpoint_id, None)
+
+            if not self._selected_llm_endpoint_id:
+                self._selected_llm_endpoint_id = endpoint_id
+
+            self._settings.set_setting("llm_endpoints", self._llm_endpoints)
+            self._settings.set_setting("llm_endpoint_secrets", self._llm_endpoint_secrets)
+            self._settings.set_setting("selected_llm_endpoint_id", self._selected_llm_endpoint_id)
+            return {"ok": True, "endpoint": next(
+                item for item in self._public_llm_endpoints() if item["id"] == endpoint_id
+            )}
+        except (LLMConfigurationError, TypeError) as exc:
+            return {"ok": False, "error": "invalid_endpoint", "message": str(exc)}
+
+    async def delete_llm_endpoint(self, endpoint_id):
+        endpoint_id = str(endpoint_id or "")
+        before = len(self._llm_endpoints)
+        self._llm_endpoints = [item for item in self._llm_endpoints if item.get("id") != endpoint_id]
+        if len(self._llm_endpoints) == before:
+            return False
+        self._llm_endpoint_secrets.pop(endpoint_id, None)
+        if self._selected_llm_endpoint_id == endpoint_id:
+            self._selected_llm_endpoint_id = (
+                self._llm_endpoints[0]["id"] if self._llm_endpoints else ""
+            )
+        self._settings.set_setting("llm_endpoints", self._llm_endpoints)
+        self._settings.set_setting("llm_endpoint_secrets", self._llm_endpoint_secrets)
+        self._settings.set_setting("selected_llm_endpoint_id", self._selected_llm_endpoint_id)
+        return True
+
+    async def select_llm_endpoint(self, endpoint_id):
+        endpoint_id = str(endpoint_id or "")
+        endpoint = next(
+            (item for item in self._llm_endpoints if item.get("id") == endpoint_id),
+            None,
+        )
+        if not endpoint or not endpoint.get("enabled", True):
+            return False
+        self._selected_llm_endpoint_id = endpoint_id
+        return self._settings.set_setting("selected_llm_endpoint_id", endpoint_id)
+
     async def get_gemini_models(self):
         try:
             if not self._gemini_api_key:
                 return []
             gemini = self._provider_manager.get_ocr_provider() if (
-                self._provider_manager and self._ocr_provider == "gemini_vision"
+                self._provider_manager and self._ocr_provider == "legacy_gemini_vision"
             ) else None
             if not gemini:
-                from providers.gemini_vision import GeminiVisionProvider
-                gemini = GeminiVisionProvider(api_key=self._gemini_api_key)
+                from providers.gemini_vision import LegacyGeminiVisionProvider
+                gemini = LegacyGeminiVisionProvider(api_key=self._gemini_api_key)
             import asyncio
             return await asyncio.to_thread(gemini.list_available_models)
         except Exception as e:
@@ -2177,9 +2278,9 @@ class Plugin:
             if self._ocr_provider == "rapidocr" and not self._provider_manager.is_rapidocr_models_downloaded():
                 return {"error": "model_not_available", "message": "RapidOCR model not downloaded.\nDownload it in plugin settings"}
 
-            # If using Gemini Vision, set the target language before OCR
+            # The retained legacy Gemini mode translates during OCR.
             # so it can translate in the same API call
-            if self._ocr_provider == "gemini_vision":
+            if self._ocr_provider == "legacy_gemini_vision":
                 self._provider_manager.set_gemini_target_language(self._target_language)
 
             start_time = time.time()
@@ -2233,7 +2334,13 @@ class Plugin:
                 except Exception as cleanup_error:
                     logger.warning(f"Failed to delete temporary screenshot: {cleanup_error}")
 
-    async def translate_text(self, text_regions, target_language=None, input_language=None):
+    async def translate_text(
+        self,
+        text_regions,
+        target_language=None,
+        input_language=None,
+        screenshot_data=None,
+    ):
         try:
             if not text_regions:
                 return []
@@ -2241,91 +2348,74 @@ class Plugin:
             target_lang = target_language or self._target_language
             input_lang = input_language or self._input_language
 
-            if not self._provider_manager:
-                logger.error("Provider manager not initialized")
-                return None
-
-            # If regions already have translatedText (e.g. from Gemini Vision),
-            # skip the translation step entirely
+            # The retained legacy Gemini mode performs OCR and translation in
+            # one request. It is the only path allowed to bypass the LLM
+            # endpoint selected below.
             if all(r.get("translatedText") is not None for r in text_regions):
-                logger.info(f"Translation skipped: {len(text_regions)} regions already translated by OCR provider")
-                if (self._translation_cache_enabled and self._translation_cache
-                        and self._ocr_provider == "gemini_vision"):
-                    pairs = [(r["text"], r["translatedText"]) for r in text_regions]
-                    if any(normalize(s) != normalize(t) for s, t in pairs):
-                        await asyncio.to_thread(
-                            self._translation_cache.put_many,
-                            pairs, input_lang, target_lang,
-                            PROVIDER_TIERS.get("gemini_vision", 0), "gemini_vision",
-                        )
+                logger.info(
+                    "Translation skipped: %d regions already translated by legacy vision mode",
+                    len(text_regions),
+                )
                 return text_regions
 
-            # Check if CT2 provider has the needed models
-            if self._translation_provider == "ct2":
-                provider = self._provider_manager.get_translation_provider()
-                if provider and not provider.is_available(input_lang, target_lang):
-                    if input_lang == "auto":
-                        return {"error": "model_not_available", "message": "Offline translation requires a specific source language. Select one in plugin settings"}
-                    return {"error": "model_not_available", "message": "Offline model not found. Download it in plugin settings"}
+            endpoint = next(
+                (
+                    item for item in self._llm_endpoints
+                    if item.get("id") == self._selected_llm_endpoint_id
+                    and item.get("enabled", True)
+                ),
+                None,
+            )
+            if not endpoint:
+                return {
+                    "error": "endpoint_not_configured",
+                    "message": "Select and configure an LLM endpoint",
+                }
 
-            # Only translate regions that don't already have translatedText
-            texts_to_translate = [
-                region["text"] for region in text_regions
-                if region.get("translatedText") is None
-            ]
+            endpoint_id = endpoint["id"]
+            api_key = self._llm_endpoint_secrets.get(endpoint_id, "")
+            provider = OpenAICompatibleLLMProvider(endpoint, api_key)
 
-            cache_on = self._translation_cache_enabled and self._translation_cache is not None
-            provider_tier = PROVIDER_TIERS.get(self._translation_provider, 0)
+            request_regions = []
+            for index, region in enumerate(text_regions):
+                if not isinstance(region, dict) or not isinstance(region.get("text"), str):
+                    continue
+                request_regions.append({**region, "id": f"ocr-{index + 1}"})
 
-            cached = {}
-            if cache_on and texts_to_translate:
-                cached = await asyncio.to_thread(
-                    self._translation_cache.get_many,
-                    texts_to_translate, input_lang, target_lang, provider_tier,
-                )
-
-            if cache_on:
-                to_request, seen = [], set()
-                for t in texts_to_translate:
-                    if t not in cached and t not in seen:
-                        seen.add(t)
-                        to_request.append(t)
-            else:
-                to_request = texts_to_translate
+            screenshot_bytes = None
+            if endpoint.get("visionEnabled"):
+                encoded = str(screenshot_data or "")
+                if encoded.startswith("data:"):
+                    encoded = encoded.split(",", 1)[-1]
+                if not encoded or len(encoded) > 16 * 1024 * 1024:
+                    raise LLMConfigurationError("Vision screenshot is missing or too large")
+                try:
+                    screenshot_bytes = base64.b64decode(encoded, validate=True)
+                except (ValueError, base64.binascii.Error) as exc:
+                    raise LLMConfigurationError("Vision screenshot is invalid") from exc
 
             start_time = time.time()
-            requested = await self._provider_manager.translate_text(
-                to_request, source_lang=input_lang, target_lang=target_lang
-            ) if to_request else []
-            elapsed = time.time() - start_time
-            logger.info(f"Translation completed in {elapsed:.2f}s, {len(to_request)} new / {len(cached)} cached")
-            for i, (src, dst) in enumerate(zip(to_request, requested)):
-                logger.debug(f"  [{i}] '{src}' -> '{dst}'")
+            result_map = await provider.translate(
+                request_regions,
+                target_language=target_lang,
+                source_language=input_lang,
+                screenshot_bytes=screenshot_bytes,
+            )
+            logger.info(
+                "LLM translation completed in %.2fs using endpoint %s: %d/%d regions",
+                time.time() - start_time,
+                endpoint_id,
+                len(result_map),
+                len(request_regions),
+            )
 
-            # Failed items come back as None
-            translated = [(s, t) for s, t in zip(to_request, requested) if t is not None]
-            if cache_on and any(normalize(s) != normalize(t) for s, t in translated):
-                await asyncio.to_thread(
-                    self._translation_cache.put_many,
-                    translated, input_lang, target_lang, provider_tier, self._translation_provider,
-                )
-
-            # A failed item shows its original text.
-            result_map = {s: (t if t is not None else s) for s, t in zip(to_request, requested)}
-            result_map.update(cached)
-
-            translated_regions = []
-            for region in text_regions:
-                if region.get("translatedText") is not None:
-                    translated_regions.append(region)
-                else:
-                    text = region["text"]
-                    translated_regions.append({
-                        **region,
-                        "translatedText": result_map.get(text, text)
-                    })
-
-            logger.debug(f"Returning {len(translated_regions)} translated regions (from {len(text_regions)} input regions)")
+            translated_regions = [
+                {
+                    **region,
+                    "translatedText": result_map.get(region["id"], region["text"]),
+                }
+                for region in request_regions
+            ]
             return translated_regions
 
         except NetworkError as e:
@@ -2337,6 +2427,12 @@ class Plugin:
         except RateLimitError as e:
             logger.error(f"Rate limit during translation: {e}")
             return {"error": "rate_limit_error", "message": str(e)}
+        except LLMConfigurationError as e:
+            logger.error(f"LLM configuration error: {e}")
+            return {"error": "llm_configuration_error", "message": str(e)}
+        except LLMResponseError as e:
+            logger.error(f"LLM response error: {e}")
+            return {"error": "llm_response_error", "message": str(e)}
         except Exception as e:
             logger.error(f"Translation error: {e}")
             logger.error(traceback.format_exc())
@@ -2375,46 +2471,6 @@ class Plugin:
 
     async def set_input_mode(self, mode):
         return await self.set_setting("input_mode", mode)
-
-    async def clear_translation_cache(self):
-        try:
-            if not self._translation_cache:
-                return {"success": False, "cleared": 0}
-            cleared = await asyncio.to_thread(self._translation_cache.clear)
-            return {"success": True, "cleared": cleared}
-        except Exception as e:
-            logger.error(f"Error clearing translation cache: {e}")
-            return {"success": False, "error": str(e)}
-
-    async def get_translation_cache_stats(self):
-        try:
-            if not self._translation_cache:
-                return {"entries": 0, "hits": 0, "size_bytes": 0}
-            return await asyncio.to_thread(self._translation_cache.stats)
-        except Exception as e:
-            logger.error(f"Error getting translation cache stats: {e}")
-            return {"entries": 0, "hits": 0, "size_bytes": 0}
-
-    async def get_translation_cache_entries(self, limit: int = 300):
-        try:
-            if not self._translation_cache:
-                return []
-            return await asyncio.to_thread(self._translation_cache.list_entries, limit)
-        except Exception as e:
-            logger.error(f"Error getting translation cache entries: {e}")
-            return []
-
-    async def delete_translation_cache_entry(self, source_lang, target_lang, source_text):
-        try:
-            if not self._translation_cache:
-                return {"success": False}
-            removed = await asyncio.to_thread(
-                self._translation_cache.delete_entry, source_lang, target_lang, source_text
-            )
-            return {"success": True, "removed": removed}
-        except Exception as e:
-            logger.error(f"Error deleting translation cache entry: {e}")
-            return {"success": False, "error": str(e)}
 
     async def start_hidraw_monitor(self):
         try:
@@ -2525,53 +2581,6 @@ class Plugin:
             logger.error(f"Error getting hidraw status: {e}")
             return {"success": False, "error": str(e)}
 
-    # -- NLLB model management API --
-
-    async def get_nllb_model_status(self):
-        try:
-            if not self._provider_manager:
-                return {"downloaded": False, "size": 0, "downloading": False, "progress": 0, "error": None}
-            return self._provider_manager.get_nllb_model_status()
-        except Exception as e:
-            logger.error(f"Error getting NLLB model status: {e}")
-            return {"downloaded": False, "size": 0, "downloading": False, "progress": 0, "error": str(e)}
-
-    async def download_nllb_model(self):
-        try:
-            if not self._provider_manager:
-                return False
-            return self._provider_manager.download_nllb_model()
-        except Exception as e:
-            logger.error(f"Error starting NLLB model download: {e}")
-            return False
-
-    async def delete_nllb_model(self):
-        try:
-            if not self._provider_manager:
-                return False
-            return self._provider_manager.delete_nllb_model()
-        except Exception as e:
-            logger.error(f"Error deleting NLLB model: {e}")
-            return False
-
-    async def cancel_nllb_download(self):
-        try:
-            if self._provider_manager:
-                self._provider_manager.cancel_nllb_download()
-            return True
-        except Exception as e:
-            logger.error(f"Error cancelling NLLB download: {e}")
-            return False
-
-    async def clear_nllb_model_error(self):
-        try:
-            if self._provider_manager:
-                self._provider_manager.clear_nllb_download_error()
-            return True
-        except Exception as e:
-            logger.error(f"Error clearing NLLB download error: {e}")
-            return False
-
     # -- Chrome Screen AI download API --
 
     async def get_chromescreenai_status(self):
@@ -2674,7 +2683,7 @@ class Plugin:
         logger.info("Plugin initialization started")
         try:
             self._settings = SettingsManager(
-                name="decky-translator-settings",
+                name="decky-llm-translator-settings",
                 settings_directory=settingsDir
             )
             self._settings.read()
@@ -2696,10 +2705,6 @@ class Plugin:
                 self._confidence_threshold = load_setting("confidence_threshold", self._confidence_threshold)
             self._pause_game_on_overlay = load_setting("pause_game_on_overlay", self._pause_game_on_overlay)
             self._quick_toggle_enabled = load_setting("quick_toggle_enabled", self._quick_toggle_enabled)
-            self._translation_cache_enabled = bool(
-                load_setting("translation_cache_enabled", self._translation_cache_enabled)
-            )
-
             os.makedirs(self._screenshotPath, exist_ok=True)
 
             def load_api_key(name):
@@ -2718,14 +2723,38 @@ class Plugin:
             google_api_key = load_api_key("google_api_key")
             if google_api_key:
                 self._google_vision_api_key = google_api_key
-                self._google_translate_api_key = google_api_key
 
             gemini_api_key = load_api_key("gemini_api_key")
             if gemini_api_key:
                 self._gemini_api_key = gemini_api_key
             self._gemini_model = self._settings.get_setting("gemini_model", "gemini-2.5-flash")
 
+            raw_endpoints = self._settings.get_setting("llm_endpoints", [])
+            raw_secrets = self._settings.get_setting("llm_endpoint_secrets", {})
+            self._llm_endpoints = []
+            if isinstance(raw_endpoints, list):
+                for raw_endpoint in raw_endpoints:
+                    try:
+                        self._llm_endpoints.append(self._normalize_llm_endpoint(raw_endpoint))
+                    except LLMConfigurationError as exc:
+                        logger.warning("Ignoring invalid saved LLM endpoint: %s", exc)
+            self._llm_endpoint_secrets = (
+                dict(raw_secrets) if isinstance(raw_secrets, dict) else {}
+            )
+            saved_endpoint_id = str(
+                self._settings.get_setting("selected_llm_endpoint_id", "") or ""
+            )
+            valid_endpoint_ids = {item["id"] for item in self._llm_endpoints}
+            self._selected_llm_endpoint_id = (
+                saved_endpoint_id if saved_endpoint_id in valid_endpoint_ids
+                else (self._llm_endpoints[0]["id"] if self._llm_endpoints else "")
+            )
+
             saved_ocr_provider = self._settings.get_setting("ocr_provider")
+            if saved_ocr_provider == "gemini_vision":
+                saved_ocr_provider = "legacy_gemini_vision"
+                self._settings.set_setting("ocr_provider", saved_ocr_provider)
+                logger.info("Renamed saved Gemini Vision mode to legacy_gemini_vision")
             if saved_ocr_provider is not None:
                 self._ocr_provider = saved_ocr_provider
                 self._use_free_providers = (saved_ocr_provider != "googlecloud")
@@ -2741,37 +2770,13 @@ class Plugin:
                     logger.info("Migrated default OCR provider rapidocr -> chromescreenai")
                 self._settings.set_setting("default_ocr_provider_migrated_v1", True)
 
-            # Load translation provider
-            saved_translation_provider = self._settings.get_setting("translation_provider")
-            if saved_translation_provider is not None:
-                self._translation_provider = saved_translation_provider
-            else:
-                if self._ocr_provider == "googlecloud":
-                    self._translation_provider = "googlecloud"
-                else:
-                    self._translation_provider = "freegoogle"
-                self._settings.set_setting("translation_provider", self._translation_provider)
-
-            # Set up CT2 translation models directory
-            ct2_models_dir = os.path.join(settingsDir, "decky-translator", "models", "nllb")
-            os.makedirs(ct2_models_dir, exist_ok=True)
-
-            # Same parent as NLLB so both share the plugin uninstall lifecycle.
-            screenai_models_dir = os.path.join(settingsDir, "decky-translator", "models")
+            # Keep OCR models under this plugin's private uninstall lifecycle.
+            screenai_models_dir = os.path.join(settingsDir, "decky-llm-translator", "models")
             os.makedirs(screenai_models_dir, exist_ok=True)
 
-            # RapidOCR models download into the same parent dir as NLLB and
-            # Chrome Screen AI so they all persist across plugin updates.
-            rapidocr_models_dir = os.path.join(settingsDir, "decky-translator", "models")
+            # RapidOCR and Chrome Screen AI models persist across plugin updates.
+            rapidocr_models_dir = os.path.join(settingsDir, "decky-llm-translator", "models")
             os.makedirs(rapidocr_models_dir, exist_ok=True)
-
-            try:
-                self._translation_cache = TranslationCache(
-                    os.path.join(settingsDir, "translation_cache.db")
-                )
-            except Exception as e:
-                logger.error(f"Failed to open translation cache, continuing without it: {e}")
-                self._translation_cache = None
 
             # Initialize provider manager
             self._provider_manager = ProviderManager()
@@ -2780,8 +2785,6 @@ class Plugin:
                 google_api_key=google_api_key,
                 gemini_api_key=gemini_api_key,
                 ocr_provider=self._ocr_provider,
-                translation_provider=self._translation_provider,
-                ct2_models_dir=ct2_models_dir,
                 screenai_models_dir=screenai_models_dir,
                 rapidocr_models_dir=rapidocr_models_dir,
             )
@@ -2796,9 +2799,6 @@ class Plugin:
             )
             self._chromescreenai_persistent_mode = bool(
                 load_setting("chromescreenai_persistent_mode", self._chromescreenai_persistent_mode)
-            )
-            self._ct2_persistent_mode = bool(
-                load_setting("ct2_persistent_mode", self._ct2_persistent_mode)
             )
             self._provider_manager.set_rapidocr_confidence(self._rapidocr_confidence)
             self._provider_manager.set_rapidocr_box_thresh(self._rapidocr_box_thresh)
@@ -2815,21 +2815,18 @@ class Plugin:
                 apply_to_provider=plugin_enabled_at_boot
                                   and self._ocr_provider == "chromescreenai",
             )
-            self._provider_manager.set_ct2_persistent_mode(
-                self._ct2_persistent_mode,
-                apply_to_provider=plugin_enabled_at_boot
-                                  and self._translation_provider == "ct2",
-            )
-
             # Apply debug_mode log level
             if self._settings.get_setting("debug_mode", False):
                 logger.setLevel(logging.DEBUG)
                 logger.debug("Debug logging enabled")
 
             provider_status = self._provider_manager.get_provider_status()
-            logger.info(f"Initialized - OCR: {provider_status.get('ocr_provider', '?')}, "
-                        f"Translation: {provider_status.get('translation_provider', '?')}, "
-                        f"Target lang: {self._target_language}")
+            logger.info(
+                "Initialized - OCR: %s, LLM endpoints: %d, target lang: %s",
+                provider_status.get('ocr_provider', '?'),
+                len(self._llm_endpoints),
+                self._target_language,
+            )
 
             # Start hidraw button monitor
             self._hidraw_monitor = HidrawButtonMonitor()
@@ -2864,10 +2861,6 @@ class Plugin:
         try:
             if self._provider_manager:
                 self._provider_manager.shutdown()
-
-            if self._translation_cache:
-                self._translation_cache.close()
-                self._translation_cache = None
 
             if self._evdev_monitor:
                 self._evdev_monitor.stop()
