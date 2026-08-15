@@ -1417,6 +1417,10 @@ class Plugin:
                 self._pause_game_on_overlay = value
             elif key == "quick_toggle_enabled":
                 self._quick_toggle_enabled = value
+            elif key == "passthrough_mode":
+                value = bool(value)
+            elif key == "text_box_opacity":
+                value = max(0, min(100, float(value)))
             elif key == "font_scale":
                 pass  # frontend-only, just persist to settings file
             elif key == "grouping_power":
@@ -1502,6 +1506,8 @@ class Plugin:
                 "pause_game_on_overlay": self._settings.get_setting("pause_game_on_overlay", False),
                 "quick_toggle_enabled": self._settings.get_setting("quick_toggle_enabled", False),
                 "debug_mode": self._settings.get_setting("debug_mode", False),
+                "passthrough_mode": self._settings.get_setting("passthrough_mode", False),
+                "text_box_opacity": self._settings.get_setting("text_box_opacity", 80),
                 "font_scale": self._settings.get_setting("font_scale", 1.0),
                 "grouping_power": self._settings.get_setting("grouping_power", 0.25),
                 "translated_text_alignment": self._settings.get_setting("translated_text_alignment", "center"),

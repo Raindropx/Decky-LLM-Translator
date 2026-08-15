@@ -17,6 +17,7 @@ export interface TranslatedRegion extends TextRegion {
 export class TextTranslator {
     private targetLanguage: string;
     private inputLanguage: string = "auto"; // Default to auto-detect
+    private lastTranslationSucceeded = false;
 
     constructor(initialLanguage: string = "en") {
         this.targetLanguage = initialLanguage;
@@ -39,7 +40,12 @@ export class TextTranslator {
         return this.inputLanguage;
     }
 
+    wasLastTranslationSuccessful(): boolean {
+        return this.lastTranslationSucceeded;
+    }
+
     async translateText(textRegions: TextRegion[], screenshotData?: string): Promise<TranslatedRegion[]> {
+        this.lastTranslationSucceeded = false;
         try {
             // Skip translation if there's nothing to translate
             if (!textRegions.length) {
@@ -88,6 +94,7 @@ export class TextTranslator {
                     }));
                 }
 
+                this.lastTranslationSucceeded = true;
                 return response as TranslatedRegion[];
             }
 

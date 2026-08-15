@@ -28,6 +28,8 @@ export interface Settings {
     geminiApiKey: string; // Write-only key status for the legacy combined Gemini mode
     geminiModel: string; // Gemini model to use
     debugMode: boolean; // Debug mode for verbose console logging
+    passthroughMode: boolean; // Show live game content behind translated labels
+    textBoxOpacity: number; // Passthrough label background opacity (0-100)
     fontScale: number; // Overlay font scale multiplier for external monitors
     groupingPower: number; // Text grouping aggressiveness (0.25 normal - 1.0 huge)
     translatedTextAlignment: 'left' | 'right' | 'center' | 'justify';
@@ -68,6 +70,8 @@ const initialSettings: Settings = {
     geminiApiKey: "", // Empty by default, needed only for the legacy combined mode
     geminiModel: "gemini-2.5-flash", // Default Gemini model
     debugMode: false, // Debug mode off by default
+    passthroughMode: false,
+    textBoxOpacity: 80,
     fontScale: 1.0,
     groupingPower: 0.25,
     translatedTextAlignment: 'center',
@@ -104,6 +108,20 @@ interface SettingsContextType {
 
 const SettingsContext = createContext<SettingsContextType | undefined>(undefined);
 
+function buildLlmEndpointCacheKey(endpoint?: LLMEndpoint): string {
+    if (!endpoint) return '';
+    return JSON.stringify([
+        endpoint.id,
+        endpoint.provider,
+        endpoint.baseUrl,
+        endpoint.model,
+        endpoint.visionEnabled,
+        endpoint.temperature,
+        endpoint.maxTokens,
+        endpoint.enabled,
+    ]);
+}
+
 // Create the provider component
 interface SettingsProviderProps {
     children: React.ReactNode;
@@ -121,6 +139,7 @@ export const SettingsProvider: React.FC<SettingsProviderProps> = ({
         dispatch({ type: 'UPDATE_SETTING', key: 'selectedLlmEndpointId', value: selectedId });
         const active = endpoints.find((endpoint) => endpoint.id === selectedId);
         logic.setHasSelectedLLMEndpoint(!!active && active.enabled);
+        logic.setLlmEndpointCacheKey(buildLlmEndpointCacheKey(active));
     }, [logic]);
 
     const refreshLlmEndpoints = useCallback(async () => {
@@ -156,6 +175,8 @@ export const SettingsProvider: React.FC<SettingsProviderProps> = ({
                     geminiApiKey: serverSettings.gemini_api_key_configured ? "configured" : "",
                     geminiModel: serverSettings.gemini_model || "gemini-2.5-flash",
                     debugMode: serverSettings.debug_mode || false,
+                    passthroughMode: serverSettings.passthrough_mode ?? false,
+                    textBoxOpacity: serverSettings.text_box_opacity ?? 80,
                     fontScale: serverSettings.font_scale ?? 1.0,
                     groupingPower: serverSettings.grouping_power ?? 0.25,
                     translatedTextAlignment: serverSettings.translated_text_alignment ?? 'center',
@@ -182,6 +203,8 @@ export const SettingsProvider: React.FC<SettingsProviderProps> = ({
                 logic.setPauseGameOnOverlay(serverSettings.pause_game_on_overlay || false); // Set pause on overlay setting
                 logic.setQuickToggleEnabled(serverSettings.quick_toggle_enabled || false); // Set quick toggle setting
                 logger.setEnabled(serverSettings.debug_mode || false); // Set debug mode for logger
+                logic.setPassthroughMode(serverSettings.passthrough_mode ?? false);
+                logic.setTextBoxOpacity(serverSettings.text_box_opacity ?? 80);
 
                 // Set provider settings for upfront API key validation
                 logic.setOcrProvider(serverSettings.ocr_provider || "chromescreenai");
@@ -191,6 +214,7 @@ export const SettingsProvider: React.FC<SettingsProviderProps> = ({
                     (endpoint: LLMEndpoint) => endpoint.id === serverSettings.selected_llm_endpoint_id
                 );
                 logic.setHasSelectedLLMEndpoint(!!activeEndpoint && activeEndpoint.enabled);
+                logic.setLlmEndpointCacheKey(buildLlmEndpointCacheKey(activeEndpoint));
 
                 logic.setFontScale(serverSettings.font_scale ?? 1.0);
                 logic.setGroupingPower(serverSettings.grouping_power ?? 0.25);
@@ -243,6 +267,8 @@ export const SettingsProvider: React.FC<SettingsProviderProps> = ({
                 geminiApiKey: 'gemini_api_key',
                 geminiModel: 'gemini_model',
                 debugMode: 'debug_mode',
+                passthroughMode: 'passthrough_mode',
+                textBoxOpacity: 'text_box_opacity',
                 fontScale: 'font_scale',
                 groupingPower: 'grouping_power',
                 translatedTextAlignment: 'translated_text_alignment',
@@ -291,6 +317,12 @@ export const SettingsProvider: React.FC<SettingsProviderProps> = ({
                     break;
                 case 'debugMode':
                     logger.setEnabled(value);
+                    break;
+                case 'passthroughMode':
+                    logic.setPassthroughMode(value);
+                    break;
+                case 'textBoxOpacity':
+                    logic.setTextBoxOpacity(value);
                     break;
                 case 'fontScale':
                     logic.setFontScale(value);

@@ -140,6 +140,35 @@ export const TabControls: VFC<TabControlsProps> = ({ inputDiagnostics }) => {
 
             <PanelSection title="Display">
                 <PanelSectionRow>
+                    <ToggleField
+                        checked={settings.passthroughMode}
+                        label="Passthrough Mode"
+                        description="Keep the game live and show only translated text boxes instead of the captured screenshot"
+                        onChange={(value) => {
+                            updateSetting('passthroughMode', value, 'Passthrough mode');
+                        }}
+                    />
+                </PanelSectionRow>
+
+                {settings.passthroughMode && (
+                    <PanelSectionRow>
+                        <SliderField
+                            value={settings.textBoxOpacity}
+                            min={0}
+                            max={100}
+                            step={5}
+                            label="Text Box Opacity"
+                            description="Adjust the translated text box background without fading the text"
+                            showValue={true}
+                            valueSuffix="%"
+                            onChange={(value) => {
+                                updateSetting('textBoxOpacity', Math.round(value), 'Text box opacity');
+                            }}
+                        />
+                    </PanelSectionRow>
+                )}
+
+                <PanelSectionRow>
                     <SliderField
                         value={settings.fontScale}
                         max={3}
@@ -266,7 +295,9 @@ export const TabControls: VFC<TabControlsProps> = ({ inputDiagnostics }) => {
                     <ToggleField
                         checked={settings.pauseGameOnOverlay}
                         label="Pause Game While Translating"
-                        description={<>Pauses the active game and allows you to read the text more thoughtfully. The game is resumed when overlay is dismissed.<br /><br />Doesn't work well with game streaming (moonlight, geforce now, remote play, etc)</>}
+                        description={settings.passthroughMode
+                            ? "Ignored while Passthrough Mode is enabled so the game remains live"
+                            : <>Pauses the active game and allows you to read the text more thoughtfully. The game is resumed when overlay is dismissed.<br /><br />Doesn't work well with game streaming (moonlight, geforce now, remote play, etc)</>}
                         onChange={(value) => {
                             updateSetting('pauseGameOnOverlay', value, 'Pause game while translating');
                         }}

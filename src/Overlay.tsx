@@ -11,6 +11,24 @@ import type { FontStyleOption } from "./fonts";
 
 export type HorizontalTextAlignment = 'left' | 'right' | 'center' | 'justify';
 
+type ImageStateChangedListener = (
+    visible: boolean,
+    imageData: string,
+    regions: TranslatedRegion[],
+    loading: boolean,
+    processingStep: string,
+    processingDetail: string,
+    processingIsError: boolean,
+    translationsVisible: boolean,
+    fontScale: number,
+    allowLabelGrowth: boolean,
+    translatedTextAlignment: HorizontalTextAlignment,
+    translatedTextFontFamily: string,
+    translatedTextFontStyle: FontStyleOption,
+    passthroughMode: boolean,
+    textBoxOpacity: number
+) => void;
+
 // UI Composition for overlay
 enum UIComposition {
     Hidden = 0,
@@ -61,13 +79,15 @@ export class ImageState {
     private translatedTextAlignment: HorizontalTextAlignment = 'center';
     private translatedTextFontFamily = "";
     private translatedTextFontStyle: FontStyleOption = 'normal';
-    private onStateChangedListeners: Array<(visible: boolean, imageData: string, regions: TranslatedRegion[], loading: boolean, processingStep: string, processingDetail: string, processingIsError: boolean, translationsVisible: boolean, fontScale: number, allowLabelGrowth: boolean, translatedTextAlignment: HorizontalTextAlignment, translatedTextFontFamily: string, translatedTextFontStyle: FontStyleOption) => void> = [];
+    private passthroughMode = false;
+    private textBoxOpacity = 80;
+    private onStateChangedListeners: ImageStateChangedListener[] = [];
 
-    onStateChanged(callback: (visible: boolean, imageData: string, regions: TranslatedRegion[], loading: boolean, processingStep: string, processingDetail: string, processingIsError: boolean, translationsVisible: boolean, fontScale: number, allowLabelGrowth: boolean, translatedTextAlignment: HorizontalTextAlignment, translatedTextFontFamily: string, translatedTextFontStyle: FontStyleOption) => void): void {
+    onStateChanged(callback: ImageStateChangedListener): void {
         this.onStateChangedListeners.push(callback);
     }
 
-    offStateChanged(callback: (visible: boolean, imageData: string, regions: TranslatedRegion[], loading: boolean, processingStep: string, processingDetail: string, processingIsError: boolean, translationsVisible: boolean, fontScale: number, allowLabelGrowth: boolean, translatedTextAlignment: HorizontalTextAlignment, translatedTextFontFamily: string, translatedTextFontStyle: FontStyleOption) => void): void {
+    offStateChanged(callback: ImageStateChangedListener): void {
         const index = this.onStateChangedListeners.indexOf(callback);
         if (index !== -1) {
             this.onStateChangedListeners.splice(index, 1);
@@ -150,6 +170,24 @@ export class ImageState {
 
     getTranslatedTextFontStyle(): FontStyleOption {
         return this.translatedTextFontStyle;
+    }
+
+    setPassthroughMode(enabled: boolean): void {
+        this.passthroughMode = enabled;
+        this.notifyListeners();
+    }
+
+    isPassthroughMode(): boolean {
+        return this.passthroughMode;
+    }
+
+    setTextBoxOpacity(opacity: number): void {
+        this.textBoxOpacity = Math.max(0, Math.min(100, opacity));
+        this.notifyListeners();
+    }
+
+    getTextBoxOpacity(): number {
+        return this.textBoxOpacity;
     }
 
     // Update the current processing step
@@ -247,7 +285,7 @@ export class ImageState {
 
     private notifyListeners(): void {
         for (const callback of this.onStateChangedListeners) {
-            callback(this.visible, this.imageData, this.translatedRegions, this.loading, this.processingStep, this.processingDetail, this.processingIsError, this.translationsVisible, this.fontScale, this.allowLabelGrowth, this.translatedTextAlignment, this.translatedTextFontFamily, this.translatedTextFontStyle);
+            callback(this.visible, this.imageData, this.translatedRegions, this.loading, this.processingStep, this.processingDetail, this.processingIsError, this.translationsVisible, this.fontScale, this.allowLabelGrowth, this.translatedTextAlignment, this.translatedTextFontFamily, this.translatedTextFontStyle, this.passthroughMode, this.textBoxOpacity);
         }
     }
 
@@ -378,8 +416,10 @@ export const TranslatedTextOverlay: VFC<{
     allowLabelGrowth: boolean,
     translatedTextAlignment: HorizontalTextAlignment,
     translatedTextFontFamily: string,
-    translatedTextFontStyle: FontStyleOption
-}> = ({ visible, imageData, regions, loading, processingStep, processingDetail, processingIsError, translationsVisible, fontScale, allowLabelGrowth, translatedTextAlignment, translatedTextFontFamily, translatedTextFontStyle }) => {
+    translatedTextFontStyle: FontStyleOption,
+    passthroughMode: boolean,
+    textBoxOpacity: number
+}> = ({ visible, imageData, regions, loading, processingStep, processingDetail, processingIsError, translationsVisible, fontScale, allowLabelGrowth, translatedTextAlignment, translatedTextFontFamily, translatedTextFontStyle, passthroughMode, textBoxOpacity }) => {
     // Composition layer is handled by CompositionRequest below -- only mounted when visible
 
     // Ref to the screenshot image element
@@ -499,7 +539,7 @@ export const TranslatedTextOverlay: VFC<{
                  left: 0,
                  backgroundColor: "transparent",
                  opacity: visible ? 1 : 0,
-                 pointerEvents: visible ? "auto" : "none",
+                 pointerEvents: visible && !passthroughMode ? "auto" : "none",
              }}>
 
             {/* Screenshot with Translations */}
@@ -515,11 +555,14 @@ export const TranslatedTextOverlay: VFC<{
                         src={formattedImageData}
                         onLoad={updateImageDimensions}
                         style={{
+                            visibility: passthroughMode ? "hidden" : "visible",
                             maxHeight: "calc(100vh - 2px)",
                             maxWidth: "calc(100vw - 2px)",
                             objectFit: "contain",
-                            backgroundColor: "rgba(0, 0, 0, 0.15)",
-                            border: translationsVisible ? "1px solid #f44336" : "1px solid #ffc107",
+                            backgroundColor: passthroughMode ? "transparent" : "rgba(0, 0, 0, 0.15)",
+                            border: passthroughMode
+                                ? "1px solid transparent"
+                                : translationsVisible ? "1px solid #f44336" : "1px solid #ffc107",
                             imageRendering: "pixelated"
                         }}
                         alt="Screenshot"
@@ -647,7 +690,9 @@ export const TranslatedTextOverlay: VFC<{
                                         minHeight: `${scaled[index].height}px`,
                                         boxSizing: 'border-box',
 
-                                        backgroundColor: "rgba(0, 0, 0, 0.8)",
+                                        backgroundColor: passthroughMode
+                                            ? `rgba(0, 0, 0, ${textBoxOpacity / 100})`
+                                            : "rgba(0, 0, 0, 0.8)",
                                         color: "#FFFFFF",
 
                                         padding: '1px 2px',
@@ -790,6 +835,8 @@ export const ImageOverlay: VFC<{ state: ImageState, onDismiss: () => void }> = (
     const [translatedTextAlignment, setTranslatedTextAlignment] = useState<HorizontalTextAlignment>('center');
     const [translatedTextFontFamily, setTranslatedTextFontFamily] = useState<string>("");
     const [translatedTextFontStyle, setTranslatedTextFontStyle] = useState<FontStyleOption>('normal');
+    const [passthroughMode, setPassthroughMode] = useState<boolean>(false);
+    const [textBoxOpacity, setTextBoxOpacity] = useState<number>(80);
 
     useEffect(() => {
         logger.debug('ImageOverlay', 'useEffect mounting, registering state listener');
@@ -807,7 +854,9 @@ export const ImageOverlay: VFC<{ state: ImageState, onDismiss: () => void }> = (
             currentAllowLabelGrowth: boolean,
             currentTranslatedTextAlignment: HorizontalTextAlignment,
             currentTranslatedTextFontFamily: string,
-            currentTranslatedTextFontStyle: FontStyleOption
+            currentTranslatedTextFontStyle: FontStyleOption,
+            currentPassthroughMode: boolean,
+            currentTextBoxOpacity: number
         ) => {
             logger.debug('ImageOverlay', `State changed - visible=${isVisible}, imgData.length=${imgData?.length || 0}, regions=${textRegions?.length || 0}`);
             setVisible(isVisible);
@@ -823,6 +872,8 @@ export const ImageOverlay: VFC<{ state: ImageState, onDismiss: () => void }> = (
             setTranslatedTextAlignment(currentTranslatedTextAlignment);
             setTranslatedTextFontFamily(currentTranslatedTextFontFamily);
             setTranslatedTextFontStyle(currentTranslatedTextFontStyle);
+            setPassthroughMode(currentPassthroughMode);
+            setTextBoxOpacity(currentTextBoxOpacity);
         };
 
         state.onStateChanged(handleStateChanged);
@@ -852,6 +903,8 @@ export const ImageOverlay: VFC<{ state: ImageState, onDismiss: () => void }> = (
             translatedTextAlignment={translatedTextAlignment}
             translatedTextFontFamily={translatedTextFontFamily}
             translatedTextFontStyle={translatedTextFontStyle}
+            passthroughMode={passthroughMode}
+            textBoxOpacity={textBoxOpacity}
         />
     );
 };

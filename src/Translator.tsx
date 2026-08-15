@@ -7,6 +7,7 @@ import { TextTranslator } from "./TextTranslator";
 import { Input, InputMode, ActionType, ProgressInfo } from "./Input";
 import { ImageState } from "./Overlay";
 import { logger } from "./Logger";
+import { LastTranslationCache } from "./TranslationCache";
 
 // Screenshot response interface
 export interface ScreenshotResponse {
@@ -20,11 +21,14 @@ export class GameTranslatorLogic {
     public imageState: ImageState;
     private textRecognizer: TextRecognizer;
     private textTranslator: TextTranslator;
+    private translationCache = new LastTranslationCache();
+    private llmEndpointCacheKey = "";
     private shortcutInput: Input; // Added shortcut input handler
     private progressListeners: Array<(progressInfo: ProgressInfo) => void> = [];
     private enabled: boolean = true; // Add enabled state
     private confidenceThreshold: number = 0.6; // Default confidence threshold
     private pauseGameOnOverlay: boolean = false;
+    private passthroughMode: boolean = false;
     private hideIdenticalTranslations: boolean = false;
     private currentRunId: number = 0;
 
@@ -71,7 +75,7 @@ export class GameTranslatorLogic {
                 if (!this.canStartTranslation()) return;
 
                 // Pause first so the game freezes before the screenshot
-                if (this.pauseGameOnOverlay) {
+                if (this.shouldPauseGameForOverlay()) {
                     this.pauseCurrentGame().catch(err => logger.error('Translator', 'Pause failed', err));
                 }
                 this.takeScreenshotAndTranslate().catch(err => logger.error('Translator', 'Screenshot failed', err));
@@ -83,7 +87,7 @@ export class GameTranslatorLogic {
 
             if (!this.enabled) return;
 
-            if (this.pauseGameOnOverlay && !visible) {
+            if (this.shouldPauseGameForOverlay() && !visible) {
                 this.resumeCurrentGame();
             }
         });
@@ -191,9 +195,30 @@ export class GameTranslatorLogic {
         logger.debug('Translator', `Setting pauseGameOnOverlay to: ${enabled}`);
         this.pauseGameOnOverlay = enabled;
 
-        // If overlay is currently visible and we're enabling this setting, pause the game
-        if (enabled && this.imageState.isVisible()) {
-            this.pauseCurrentGame();
+        if (this.imageState.isVisible()) {
+            if (this.shouldPauseGameForOverlay()) {
+                this.pauseCurrentGame();
+            } else {
+                this.resumeCurrentGame();
+            }
+        }
+    }
+
+    private shouldPauseGameForOverlay = (): boolean => {
+        return this.pauseGameOnOverlay && !this.passthroughMode;
+    }
+
+    setPassthroughMode = (enabled: boolean): void => {
+        const wasPausing = this.shouldPauseGameForOverlay();
+        this.passthroughMode = enabled;
+        this.imageState.setPassthroughMode(enabled);
+
+        if (this.imageState.isVisible() && wasPausing !== this.shouldPauseGameForOverlay()) {
+            if (this.shouldPauseGameForOverlay()) {
+                this.pauseCurrentGame();
+            } else {
+                this.resumeCurrentGame();
+            }
         }
     }
 
@@ -361,17 +386,34 @@ export class GameTranslatorLogic {
 
             if (textRegions.length > 0) {
                 const alreadyTranslated = textRegions.every(r => r.translatedText);
-                if (!alreadyTranslated) {
-                    this.imageState.updateProcessingStep("Translating text", false, this.translationMethodHint());
-                }
+                let translatedRegions = alreadyTranslated
+                    ? null
+                    : this.translationCache.get(textRegions);
 
-                // Translate text (skips backend call if already translated by OCR provider)
-                let translatedRegions = await this.textTranslator.translateText(textRegions, result.base64);
-                if (isCancelled()) {
-                    logger.debug('Translator', 'Translation cancelled after translation step');
-                    return;
+                if (translatedRegions) {
+                    logger.info('Translator', `Translation cache hit: ${translatedRegions.length} regions`);
+                } else {
+                    const cacheRevision = this.translationCache.getRevision();
+                    if (!alreadyTranslated) {
+                        this.imageState.updateProcessingStep("Translating text", false, this.translationMethodHint());
+                    }
+
+                    // Legacy vision regions are already translated; normal OCR regions call the selected LLM.
+                    translatedRegions = await this.textTranslator.translateText(textRegions, result.base64);
+                    if (isCancelled()) {
+                        logger.debug('Translator', 'Translation cancelled after translation step');
+                        return;
+                    }
+                    logger.info('Translator', `Translation complete: ${translatedRegions.length} regions`);
+
+                    if (!alreadyTranslated && this.textTranslator.wasLastTranslationSuccessful()) {
+                        if (this.translationCache.store(textRegions, translatedRegions, cacheRevision)) {
+                            logger.debug('Translator', `Stored translation cache entry for ${textRegions.length} regions`);
+                        } else {
+                            logger.warn('Translator', 'Translation result was not cacheable because settings changed or region counts differed');
+                        }
+                    }
                 }
-                logger.info('Translator', `Translation complete: ${translatedRegions.length} regions`);
 
                 if (this.hideIdenticalTranslations) {
                     const before = translatedRegions.length;
@@ -523,6 +565,9 @@ export class GameTranslatorLogic {
     }
 
     setInputLanguage = (language: string): void => {
+        if (language !== this.textTranslator.getInputLanguage()) {
+            this.translationCache.clear();
+        }
         this.textTranslator.setInputLanguage(language);
     }
 
@@ -531,6 +576,9 @@ export class GameTranslatorLogic {
     }
 
     setTargetLanguage = (language: string): void => {
+        if (language !== this.textTranslator.getTargetLanguage()) {
+            this.translationCache.clear();
+        }
         this.textTranslator.setTargetLanguage(language);
     }
 
@@ -588,6 +636,10 @@ export class GameTranslatorLogic {
         this.imageState.setFontScale(scale);
     }
 
+    setTextBoxOpacity = (opacity: number): void => {
+        this.imageState.setTextBoxOpacity(opacity);
+    }
+
     setAllowLabelGrowth = (allow: boolean): void => {
         this.imageState.setAllowLabelGrowth(allow);
     }
@@ -606,8 +658,19 @@ export class GameTranslatorLogic {
 
     // Methods for provider settings (used for upfront API key validation)
     setOcrProvider = (provider: string): void => {
+        if (provider !== this.ocrProvider) {
+            this.translationCache.clear();
+        }
         this.ocrProvider = provider;
         logger.debug('Translator', `OCR provider set to: ${provider}`);
+    }
+
+    setLlmEndpointCacheKey = (cacheKey: string): void => {
+        if (cacheKey !== this.llmEndpointCacheKey) {
+            this.llmEndpointCacheKey = cacheKey;
+            this.translationCache.clear();
+            logger.debug('Translator', 'Translation cache cleared because the LLM endpoint changed');
+        }
     }
 
     private translationMethodHint(): string {
