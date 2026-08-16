@@ -290,6 +290,40 @@ export const TabControls: VFC<TabControlsProps> = ({ inputDiagnostics }) => {
                 </PanelSectionRow>
             </PanelSection>
 
+            <PanelSection title="Steam Screenshots">
+                <PanelSectionRow>
+                    <ToggleField
+                        checked={settings.steamScreenshotTranslationEnabled}
+                        label="Include Translations in Screenshots"
+                        description="Composite the currently visible translated text boxes into STEAM+R1 screenshots"
+                        onChange={(value) => {
+                            updateSetting(
+                                'steamScreenshotTranslationEnabled',
+                                value,
+                                'Screenshot translation',
+                            );
+                        }}
+                    />
+                </PanelSectionRow>
+
+                {settings.steamScreenshotTranslationEnabled && (
+                    <PanelSectionRow>
+                        <ToggleField
+                            checked={settings.steamScreenshotKeepOriginal}
+                            label="Keep Original Screenshot"
+                            description="Keep Steam's native image and create a numbered translated copy beside it. Steam Media may not index plugin-created copies"
+                            onChange={(value) => {
+                                updateSetting(
+                                    'steamScreenshotKeepOriginal',
+                                    value,
+                                    'Keep original screenshot',
+                                );
+                            }}
+                        />
+                    </PanelSectionRow>
+                )}
+            </PanelSection>
+
             <PanelSection title="Behavior">
                 <PanelSectionRow>
                     <ToggleField

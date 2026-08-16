@@ -8,6 +8,10 @@ import { Input, InputMode, ActionType, ProgressInfo } from "./Input";
 import { ImageState } from "./Overlay";
 import { logger } from "./Logger";
 import { LastTranslationCache } from "./TranslationCache";
+import {
+    renderTranslatedSteamScreenshot,
+    SteamScreenshotResponse,
+} from "./SteamScreenshot";
 
 // Screenshot response interface
 export interface ScreenshotResponse {
@@ -31,6 +35,9 @@ export class GameTranslatorLogic {
     private passthroughMode: boolean = false;
     private hideIdenticalTranslations: boolean = false;
     private currentRunId: number = 0;
+    private steamScreenshotAnnotationInProgress = false;
+    private steamScreenshotTranslationEnabled = true;
+    private steamScreenshotKeepOriginal = false;
 
     // Provider settings for upfront validation
     private ocrProvider: string = "rapidocr";
@@ -80,6 +87,12 @@ export class GameTranslatorLogic {
                 }
                 this.takeScreenshotAndTranslate().catch(err => logger.error('Translator', 'Screenshot failed', err));
             }
+        });
+
+        this.shortcutInput.onSteamScreenshotPressed(() => {
+            this.annotateSteamScreenshot().catch(error => {
+                logger.error('Translator', 'Steam screenshot annotation failed', error);
+            });
         });
 
         imageState.onStateChanged((visible, _, __, ___, ____, _____, ______, _______, ________) => {
@@ -482,6 +495,111 @@ export class GameTranslatorLogic {
         }
     }
 
+    private annotateSteamScreenshot = async (): Promise<void> => {
+        const snapshot = this.imageState.getScreenshotOverlaySnapshot();
+        if (
+            !this.enabled
+            || !this.steamScreenshotTranslationEnabled
+            || !this.imageState.isVisible()
+            || snapshot.loading
+            || !snapshot.translationsVisible
+            || !snapshot.imageData
+            || snapshot.regions.length === 0
+        ) {
+            logger.debug('Translator', 'Steam screenshot has no ready visible translation overlay to include');
+            return;
+        }
+        if (this.steamScreenshotAnnotationInProgress) {
+            logger.warn('Translator', 'Steam screenshot annotation already in progress, keeping native screenshot');
+            return;
+        }
+
+        const appIdValue = Router.MainRunningApp?.appid;
+        if (appIdValue === undefined || appIdValue === null || String(appIdValue).trim() === '') {
+            logger.warn('Translator', 'Cannot annotate Steam screenshot without a running app ID');
+            return;
+        }
+
+        this.steamScreenshotAnnotationInProgress = true;
+        try {
+            // Keep the app ID as a string: non-Steam shortcut IDs can exceed
+            // JavaScript's safe integer range and must match Steam's directory exactly.
+            const appId = String(appIdValue);
+            logger.debug(
+                'Translator',
+                `Preparing Steam screenshot translation in ${this.steamScreenshotKeepOriginal ? 'copy' : 'replace'} mode`,
+            );
+            const response = await call<[string, number], SteamScreenshotResponse>(
+                'wait_for_steam_screenshot',
+                appId,
+                Date.now(),
+            );
+            if (
+                !response?.found
+                || !response.capture_token
+                || !response.mime
+                || !response.base64
+            ) {
+                logger.warn('Translator', `Native Steam screenshot not available: ${response?.reason || 'unknown'}`);
+                await this.notify(
+                    'Screenshot kept without translations',
+                    2500,
+                    'Steam screenshot file was not found in time',
+                );
+                return;
+            }
+
+            const annotatedImage = await renderTranslatedSteamScreenshot(
+                response.base64,
+                response.mime,
+                snapshot,
+            );
+            const result = await call<
+                [string, string],
+                {
+                    success: boolean;
+                    reason?: string;
+                    thumbnail_updated?: boolean;
+                    mode?: 'replace' | 'copy';
+                }
+            >(
+                'replace_steam_screenshot',
+                response.capture_token,
+                annotatedImage,
+            );
+            if (!result?.success) {
+                logger.warn('Translator', `Steam screenshot replacement failed: ${result?.reason || 'unknown'}`);
+                await this.notify(
+                    'Screenshot kept without translations',
+                    2500,
+                    'The original Steam screenshot was preserved',
+                );
+                return;
+            }
+
+            logger.info(
+                'Translator',
+                `Steam screenshot translation written; mode=${result.mode || 'replace'}, `
+                    + `thumbnail_updated=${Boolean(result.thumbnail_updated)}`,
+            );
+            await this.notify(
+                result.mode === 'copy'
+                    ? 'Translated screenshot copy saved'
+                    : 'Steam screenshot saved with translations',
+                1800,
+            );
+        } catch (error) {
+            logger.error('Translator', 'Could not annotate Steam screenshot; original remains intact', error);
+            await this.notify(
+                'Screenshot kept without translations',
+                2500,
+                'The original Steam screenshot was preserved',
+            );
+        } finally {
+            this.steamScreenshotAnnotationInProgress = false;
+        }
+    }
+
     takeScreenshotAndTestOcr = async (): Promise<void> => {
         if (this.isProcessing || !this.enabled) {
             logger.debug('Translator', 'Already processing a screenshot or plugin disabled, skipping OCR test');
@@ -638,6 +756,14 @@ export class GameTranslatorLogic {
 
     setTextBoxOpacity = (opacity: number): void => {
         this.imageState.setTextBoxOpacity(opacity);
+    }
+
+    setSteamScreenshotTranslationEnabled = (enabled: boolean): void => {
+        this.steamScreenshotTranslationEnabled = enabled;
+    }
+
+    setSteamScreenshotKeepOriginal = (enabled: boolean): void => {
+        this.steamScreenshotKeepOriginal = enabled;
     }
 
     setAllowLabelGrowth = (allow: boolean): void => {

@@ -99,6 +99,14 @@ from providers.llm_translation import (
     LLMResponseError,
     OpenAICompatibleLLMProvider,
 )
+from providers.steam_screenshots import (
+    create_translated_screenshot_copy,
+    find_latest_screenshot,
+    find_latest_screenshot_any_app,
+    mime_for_path,
+    normalize_app_id,
+    replace_screenshot_and_thumbnail,
+)
 
 _processing_lock = False
 
@@ -1188,6 +1196,8 @@ class Plugin:
     _chromescreenai_persistent_mode: bool = False  # Keep Chrome Screen AI worker alive between requests
     _pause_game_on_overlay: bool = False  # Default to not pausing game on overlay
     _quick_toggle_enabled: bool = False  # Default to disabled for quick toggle
+    _steam_screenshot_translation_enabled: bool = True
+    _steam_screenshot_keep_original: bool = False
 
     # Hidraw button monitor
     _hidraw_monitor: HidrawButtonMonitor = None
@@ -1214,6 +1224,8 @@ class Plugin:
     _fallback_dims = None
     _capture_backend = None  # "pipewire" | "spectacle" | "portal" | None
     _session_env = None  # session env (XDG_CURRENT_DESKTOP, DBUS, WAYLAND...)
+    _pending_steam_screenshot_captures: dict = {}
+    _generated_steam_screenshot_copies: dict = {}
 
     def _load_session_env(self):
         # plugin_loader.service starts at boot with no graphical env
@@ -1428,6 +1440,12 @@ class Plugin:
                 value = bool(value)
             elif key == "text_box_opacity":
                 value = max(0, min(100, float(value)))
+            elif key == "steam_screenshot_translation_enabled":
+                value = bool(value)
+                self._steam_screenshot_translation_enabled = value
+            elif key == "steam_screenshot_keep_original":
+                value = bool(value)
+                self._steam_screenshot_keep_original = value
             elif key == "font_scale":
                 pass  # frontend-only, just persist to settings file
             elif key == "grouping_power":
@@ -1516,6 +1534,12 @@ class Plugin:
                 "debug_mode": self._settings.get_setting("debug_mode", False),
                 "passthrough_mode": self._settings.get_setting("passthrough_mode", False),
                 "text_box_opacity": self._settings.get_setting("text_box_opacity", 80),
+                "steam_screenshot_translation_enabled": self._settings.get_setting(
+                    "steam_screenshot_translation_enabled", True
+                ),
+                "steam_screenshot_keep_original": self._settings.get_setting(
+                    "steam_screenshot_keep_original", False
+                ),
                 "font_scale": self._settings.get_setting("font_scale", 1.0),
                 "grouping_power": self._settings.get_setting("grouping_power", 0.25),
                 "translated_text_alignment": self._settings.get_setting("translated_text_alignment", "center"),
@@ -1807,6 +1831,164 @@ class Plugin:
 
         finally:
             _processing_lock = False
+
+    async def wait_for_steam_screenshot(self, app_id, not_before_ms):
+        """Wait for Steam's own STEAM+R1 screenshot and return a one-use capture token."""
+        try:
+            if not self._steam_screenshot_translation_enabled:
+                return {"found": False, "reason": "screenshot_translation_disabled"}
+            normalized_app_id = normalize_app_id(app_id)
+            now = time.time()
+            try:
+                requested_at = float(not_before_ms) / 1000.0
+            except (TypeError, ValueError):
+                requested_at = now
+            if abs(requested_at - now) > 30:
+                requested_at = now
+
+            # Frontend polling can observe the combo just after Steam finishes
+            # writing the file, so tolerate a small timestamp lead without
+            # reaching far enough back to rewrite an earlier rapid screenshot.
+            not_before = requested_at - 0.75
+            deadline = time.monotonic() + 4.0
+            earliest_accept = time.monotonic() + 0.35
+            stable_signature = None
+            stable_count = 0
+            screenshot_path = None
+
+            for path, expires_at in list(self._generated_steam_screenshot_copies.items()):
+                if expires_at < time.monotonic():
+                    self._generated_steam_screenshot_copies.pop(path, None)
+            excluded_paths = set(self._generated_steam_screenshot_copies)
+
+            while time.monotonic() < deadline:
+                app_candidate = find_latest_screenshot(
+                    DECKY_HOME, normalized_app_id, not_before, excluded_paths
+                )
+                # Some Steam UI builds expose large non-Steam shortcut IDs
+                # through a JS number, which can already be precision-truncated.
+                # Compare with the newest screenshot across apps inside this
+                # narrow post-shortcut timestamp window and take the newer file.
+                any_candidate = find_latest_screenshot_any_app(
+                    DECKY_HOME, not_before, excluded_paths
+                )
+                candidate_options = [
+                    path for path in (app_candidate, any_candidate) if path is not None
+                ]
+                candidate = max(
+                    candidate_options,
+                    default=None,
+                    key=lambda path: path.stat().st_mtime_ns,
+                )
+                if candidate is not None:
+                    try:
+                        stat = candidate.stat()
+                        signature = (str(candidate), stat.st_size, stat.st_mtime_ns)
+                    except OSError:
+                        signature = None
+
+                    if signature is not None and signature == stable_signature:
+                        stable_count += 1
+                    else:
+                        stable_signature = signature
+                        stable_count = 1 if signature is not None else 0
+
+                    if stable_count >= 2 and time.monotonic() >= earliest_accept:
+                        screenshot_path = candidate
+                        break
+
+                await asyncio.sleep(0.1)
+
+            if screenshot_path is None:
+                logger.warning(
+                    f"No recent Steam screenshot found for app {normalized_app_id}"
+                )
+                return {"found": False, "reason": "screenshot_not_found"}
+
+            image_bytes = await asyncio.to_thread(screenshot_path.read_bytes)
+            if len(image_bytes) > 50 * 1024 * 1024:
+                logger.warning(f"Steam screenshot is unexpectedly large: {len(image_bytes)} bytes")
+                return {"found": False, "reason": "screenshot_too_large"}
+
+            # Tokens keep arbitrary filesystem paths out of the frontend API and
+            # expire quickly so a later screenshot cannot reuse stale authority.
+            expires_at = time.monotonic() + 30.0
+            for token, capture in list(self._pending_steam_screenshot_captures.items()):
+                if capture[2] < time.monotonic():
+                    self._pending_steam_screenshot_captures.pop(token, None)
+
+            capture_token = secrets.token_urlsafe(24)
+            actual_app_id = screenshot_path.parent.parent.name
+            self._pending_steam_screenshot_captures[capture_token] = (
+                normalize_app_id(actual_app_id),
+                str(screenshot_path),
+                expires_at,
+            )
+            logger.info(
+                f"Found Steam screenshot for app {normalized_app_id}: {screenshot_path.name}"
+            )
+            return {
+                "found": True,
+                "capture_token": capture_token,
+                "mime": mime_for_path(screenshot_path),
+                "base64": base64.b64encode(image_bytes).decode("ascii"),
+            }
+        except ValueError as e:
+            logger.warning(f"Steam screenshot request rejected: {e}")
+            return {"found": False, "reason": "invalid_app_id"}
+        except Exception as e:
+            logger.error(f"Failed waiting for Steam screenshot: {e}")
+            logger.debug(traceback.format_exc())
+            return {"found": False, "reason": "screenshot_read_failed"}
+
+    async def replace_steam_screenshot(self, capture_token: str, image_data: str):
+        """Write a translated replacement or copy for the token's native screenshot."""
+        capture = self._pending_steam_screenshot_captures.pop(str(capture_token), None)
+        if capture is None:
+            return {"success": False, "reason": "invalid_capture_token"}
+
+        app_id, screenshot_path, expires_at = capture
+        if expires_at < time.monotonic():
+            return {"success": False, "reason": "capture_token_expired"}
+        if not self._steam_screenshot_translation_enabled:
+            return {"success": False, "reason": "screenshot_translation_disabled"}
+
+        try:
+            encoded = str(image_data or "")
+            if encoded.startswith("data:"):
+                encoded = encoded.split(",", 1)[-1]
+            if not encoded or len(encoded) > 70 * 1024 * 1024:
+                raise ValueError("Annotated screenshot is missing or too large")
+            image_bytes = base64.b64decode(encoded, validate=True)
+
+            write_screenshot = (
+                create_translated_screenshot_copy
+                if self._steam_screenshot_keep_original
+                else replace_screenshot_and_thumbnail
+            )
+            result = await asyncio.to_thread(
+                write_screenshot,
+                DECKY_HOME,
+                app_id,
+                screenshot_path,
+                image_bytes,
+            )
+            if result["mode"] == "copy":
+                self._generated_steam_screenshot_copies[result["path"]] = (
+                    time.monotonic() + 10.0
+                )
+            logger.info(
+                "Steam screenshot translation written: "
+                f"{Path(result['path']).name} "
+                f"({result['width']}x{result['height']}), "
+                f"mode={result['mode']}, "
+                f"thumbnail_updated={result['thumbnail_updated']}"
+            )
+            return {"success": True, **result}
+        except Exception as e:
+            logger.error(f"Failed to write Steam screenshot translation: {e}")
+            logger.debug(traceback.format_exc())
+            return {"success": False, "reason": "screenshot_write_failed"}
 
     async def _take_screenshot_pipewire(self, env, screenshot_path, MIN_VALID_SIZE, MAX_ATTEMPTS, FALLBACK_NUM_BUFFERS, FALLBACK_STDDEV_THRESHOLD):
         env = dict(env)
@@ -2771,6 +2953,14 @@ class Plugin:
                 self._confidence_threshold = load_setting("confidence_threshold", self._confidence_threshold)
             self._pause_game_on_overlay = load_setting("pause_game_on_overlay", self._pause_game_on_overlay)
             self._quick_toggle_enabled = load_setting("quick_toggle_enabled", self._quick_toggle_enabled)
+            self._steam_screenshot_translation_enabled = bool(load_setting(
+                "steam_screenshot_translation_enabled",
+                self._steam_screenshot_translation_enabled,
+            ))
+            self._steam_screenshot_keep_original = bool(load_setting(
+                "steam_screenshot_keep_original",
+                self._steam_screenshot_keep_original,
+            ))
             os.makedirs(self._screenshotPath, exist_ok=True)
 
             def load_api_key(name):

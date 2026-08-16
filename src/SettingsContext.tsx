@@ -36,6 +36,8 @@ export interface Settings {
     debugMode: boolean; // Debug mode for verbose console logging
     passthroughMode: boolean; // Show live game content behind translated labels
     textBoxOpacity: number; // Passthrough label background opacity (0-100)
+    steamScreenshotTranslationEnabled: boolean; // Composite visible translations into STEAM+R1 screenshots
+    steamScreenshotKeepOriginal: boolean; // Preserve native screenshot and create translated copy
     fontScale: number; // Overlay font scale multiplier for external monitors
     groupingPower: number; // Text grouping aggressiveness (0.25 normal - 1.0 huge)
     translatedTextAlignment: 'left' | 'right' | 'center' | 'justify';
@@ -79,6 +81,8 @@ const initialSettings: Settings = {
     debugMode: false, // Debug mode off by default
     passthroughMode: false,
     textBoxOpacity: 80,
+    steamScreenshotTranslationEnabled: true,
+    steamScreenshotKeepOriginal: false,
     fontScale: 1.0,
     groupingPower: 0.25,
     translatedTextAlignment: 'center',
@@ -185,6 +189,8 @@ export const SettingsProvider: React.FC<SettingsProviderProps> = ({
                     debugMode: serverSettings.debug_mode || false,
                     passthroughMode: serverSettings.passthrough_mode ?? false,
                     textBoxOpacity: serverSettings.text_box_opacity ?? 80,
+                    steamScreenshotTranslationEnabled: serverSettings.steam_screenshot_translation_enabled ?? true,
+                    steamScreenshotKeepOriginal: serverSettings.steam_screenshot_keep_original ?? false,
                     fontScale: serverSettings.font_scale ?? 1.0,
                     groupingPower: serverSettings.grouping_power ?? 0.25,
                     translatedTextAlignment: serverSettings.translated_text_alignment ?? 'center',
@@ -213,6 +219,12 @@ export const SettingsProvider: React.FC<SettingsProviderProps> = ({
                 logger.setEnabled(serverSettings.debug_mode || false); // Set debug mode for logger
                 logic.setPassthroughMode(serverSettings.passthrough_mode ?? false);
                 logic.setTextBoxOpacity(serverSettings.text_box_opacity ?? 80);
+                logic.setSteamScreenshotTranslationEnabled(
+                    serverSettings.steam_screenshot_translation_enabled ?? true,
+                );
+                logic.setSteamScreenshotKeepOriginal(
+                    serverSettings.steam_screenshot_keep_original ?? false,
+                );
 
                 // Set provider settings for upfront API key validation
                 logic.setOcrProvider(serverSettings.ocr_provider || "chromescreenai");
@@ -279,6 +291,8 @@ export const SettingsProvider: React.FC<SettingsProviderProps> = ({
                 debugMode: 'debug_mode',
                 passthroughMode: 'passthrough_mode',
                 textBoxOpacity: 'text_box_opacity',
+                steamScreenshotTranslationEnabled: 'steam_screenshot_translation_enabled',
+                steamScreenshotKeepOriginal: 'steam_screenshot_keep_original',
                 fontScale: 'font_scale',
                 groupingPower: 'grouping_power',
                 translatedTextAlignment: 'translated_text_alignment',
@@ -334,6 +348,12 @@ export const SettingsProvider: React.FC<SettingsProviderProps> = ({
                 case 'textBoxOpacity':
                     logic.setTextBoxOpacity(value);
                     break;
+                case 'steamScreenshotTranslationEnabled':
+                    logic.setSteamScreenshotTranslationEnabled(value);
+                    break;
+                case 'steamScreenshotKeepOriginal':
+                    logic.setSteamScreenshotKeepOriginal(value);
+                    break;
                 case 'fontScale':
                     logic.setFontScale(value);
                     break;
@@ -373,18 +393,40 @@ export const SettingsProvider: React.FC<SettingsProviderProps> = ({
                 // if (label) logic.notify(`${label} updated successfully`);
                 return true;
             } else {
-                if (key === 'customLanguages' || key === 'targetLanguage') {
+                if (
+                    key === 'customLanguages'
+                    || key === 'targetLanguage'
+                    || key === 'steamScreenshotTranslationEnabled'
+                    || key === 'steamScreenshotKeepOriginal'
+                ) {
                     dispatch({ type: 'UPDATE_SETTING', key, value: previousValue });
                 }
                 if (key === 'targetLanguage') logic.setTargetLanguage(previousValue as string);
+                if (key === 'steamScreenshotTranslationEnabled') {
+                    logic.setSteamScreenshotTranslationEnabled(previousValue as boolean);
+                }
+                if (key === 'steamScreenshotKeepOriginal') {
+                    logic.setSteamScreenshotKeepOriginal(previousValue as boolean);
+                }
                 logic.notify(`Failed to update ${label || key}`, 2000);
                 return false;
             }
         } catch (error) {
-            if (key === 'customLanguages' || key === 'targetLanguage') {
+            if (
+                key === 'customLanguages'
+                || key === 'targetLanguage'
+                || key === 'steamScreenshotTranslationEnabled'
+                || key === 'steamScreenshotKeepOriginal'
+            ) {
                 dispatch({ type: 'UPDATE_SETTING', key, value: previousValue });
             }
             if (key === 'targetLanguage') logic.setTargetLanguage(previousValue as string);
+            if (key === 'steamScreenshotTranslationEnabled') {
+                logic.setSteamScreenshotTranslationEnabled(previousValue as boolean);
+            }
+            if (key === 'steamScreenshotKeepOriginal') {
+                logic.setSteamScreenshotKeepOriginal(previousValue as boolean);
+            }
             logger.error('SettingsContext', `Failed to update ${key}`, error);
             logic.notify(`Failed to update ${label || key}`, 2000);
             return false;

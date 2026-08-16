@@ -92,6 +92,8 @@ const HIDRAW_BUTTON_MAP: Record<string, Button> = {
 export class Input {
     private onButtonsPressedListeners: Array<(actionType: ActionType) => void> = [];
     private onProgressListeners: Array<(progressInfo: ProgressInfo) => void> = [];
+    private onSteamScreenshotPressedListeners: Array<() => void> = [];
+    private steamScreenshotComboActive = false;
     private touchStartTime: number | null = null;
 
     private pollingInterval: ReturnType<typeof setInterval> | null = null;
@@ -182,6 +184,16 @@ export class Input {
                 newPressedButtons.add(button);
             }
         }
+
+        // Observe Steam's native screenshot shortcut without consuming it. Use
+        // a rising edge so the 10 Hz polling loop fires once per STEAM+R1 press.
+        const screenshotComboActive =
+            newPressedButtons.has(Button.STEAM) && newPressedButtons.has(Button.R1);
+        if (screenshotComboActive && !this.steamScreenshotComboActive) {
+            logger.info('Input', 'Steam screenshot shortcut detected');
+            this.onSteamScreenshotPressedListeners.forEach(callback => callback());
+        }
+        this.steamScreenshotComboActive = screenshotComboActive;
 
         // Check if the button state actually changed
         const stateChanged = this.hasButtonSetChanged(newPressedButtons);
@@ -309,6 +321,7 @@ export class Input {
             this.leftTouchpadTouched = false;
             this.rightTouchpadTouched = false;
             this.currentlyPressedButtons.clear();
+            this.steamScreenshotComboActive = false;
         }
     }
 
@@ -357,6 +370,11 @@ export class Input {
         if (this.timeoutId) clearTimeout(this.timeoutId);
         if (this.animationFrameId) cancelAnimationFrame(this.animationFrameId);
         if (this.clearCooldownTimeoutId) clearTimeout(this.clearCooldownTimeoutId);
+        this.onSteamScreenshotPressedListeners = [];
+    }
+
+    onSteamScreenshotPressed(callback: () => void): void {
+        this.onSteamScreenshotPressedListeners.push(callback);
     }
 
     setInputMode(mode: InputMode): void {

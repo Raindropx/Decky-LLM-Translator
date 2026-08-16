@@ -11,6 +11,20 @@ import type { FontStyleOption } from "./fonts";
 
 export type HorizontalTextAlignment = 'left' | 'right' | 'center' | 'justify';
 
+export interface ScreenshotOverlaySnapshot {
+    imageData: string;
+    regions: TranslatedRegion[];
+    translationsVisible: boolean;
+    loading: boolean;
+    fontScale: number;
+    allowLabelGrowth: boolean;
+    translatedTextAlignment: HorizontalTextAlignment;
+    translatedTextFontFamily: string;
+    translatedTextFontStyle: FontStyleOption;
+    passthroughMode: boolean;
+    textBoxOpacity: number;
+}
+
 type ImageStateChangedListener = (
     visible: boolean,
     imageData: string,
@@ -188,6 +202,26 @@ export class ImageState {
 
     getTextBoxOpacity(): number {
         return this.textBoxOpacity;
+    }
+
+    getScreenshotOverlaySnapshot(): ScreenshotOverlaySnapshot {
+        return {
+            imageData: this.imageData,
+            regions: this.translatedRegions.map(region => ({
+                ...region,
+                rect: { ...region.rect },
+                bgColor: region.bgColor ? [...region.bgColor] : undefined,
+            })),
+            translationsVisible: this.translationsVisible,
+            loading: this.loading,
+            fontScale: this.fontScale,
+            allowLabelGrowth: this.allowLabelGrowth,
+            translatedTextAlignment: this.translatedTextAlignment,
+            translatedTextFontFamily: this.translatedTextFontFamily,
+            translatedTextFontStyle: this.translatedTextFontStyle,
+            passthroughMode: this.passthroughMode,
+            textBoxOpacity: this.textBoxOpacity,
+        };
     }
 
     // Update the current processing step
