@@ -219,7 +219,7 @@ const CustomLanguagesModal: VFC<{
                             key={`${language.alias}-${index}`}
                             style={{
                                 display: 'grid',
-                                gridTemplateColumns: 'minmax(0, 1fr) auto auto',
+                                gridTemplateColumns: 'minmax(0, 1fr) 44px 44px',
                                 gap: '8px',
                                 alignItems: 'center',
                                 padding: '8px 0',
@@ -227,24 +227,52 @@ const CustomLanguagesModal: VFC<{
                             }}
                         >
                             <div style={{ minWidth: 0 }}>
-                                <div style={{ fontWeight: 600 }}>{language.alias}</div>
-                                <div style={{ color: '#aaa', fontSize: '12px', overflowWrap: 'anywhere' }}>
+                                <div style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                    {language.alias}
+                                </div>
+                                <div
+                                    title={language.definition}
+                                    style={{
+                                        color: '#aaa',
+                                        fontSize: '12px',
+                                        overflow: 'hidden',
+                                        textOverflow: 'ellipsis',
+                                        whiteSpace: 'nowrap',
+                                    }}
+                                >
                                     {language.definition}
                                 </div>
                             </div>
                             <DialogButton
                                 onClick={() => startEditing(index)}
                                 aria-label={`Edit ${language.alias}`}
-                                style={{ minWidth: '44px', padding: 0 }}
+                                style={{
+                                    width: '44px',
+                                    height: '36px',
+                                    minWidth: '44px',
+                                    padding: 0,
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                }}
                             >
-                                <HiPencil />
+                                <HiPencil size={18} />
                             </DialogButton>
                             <DialogButton
                                 onClick={() => deleteLanguage(index)}
                                 aria-label={`Delete ${language.alias}`}
-                                style={{ minWidth: '44px', padding: 0 }}
+                                style={{
+                                    width: '44px',
+                                    height: '36px',
+                                    minWidth: '44px',
+                                    padding: 0,
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    color: '#ff8a80',
+                                }}
                             >
-                                <HiTrash />
+                                <HiTrash size={18} />
                             </DialogButton>
                         </Focusable>
                     ))}
@@ -265,12 +293,35 @@ const CustomLanguagesModal: VFC<{
                             value={alias}
                             onChange={(event) => setAlias(event.target.value)}
                         />
-                        <TextField
+                        <Field
                             label="Definition"
                             description="Exact target-language instruction sent to the LLM"
-                            value={definition}
-                            onChange={(event) => setDefinition(event.target.value)}
-                        />
+                            childrenContainerWidth="max"
+                            childrenLayout="below"
+                        >
+                            <textarea
+                                aria-label="Definition"
+                                value={definition}
+                                maxLength={2000}
+                                rows={5}
+                                onChange={(event) => setDefinition(event.target.value)}
+                                style={{
+                                    width: '100%',
+                                    minHeight: '112px',
+                                    boxSizing: 'border-box',
+                                    marginTop: '8px',
+                                    padding: '10px 12px',
+                                    resize: 'vertical',
+                                    border: '1px solid rgba(255,255,255,0.22)',
+                                    borderRadius: '2px',
+                                    background: 'rgba(0,0,0,0.3)',
+                                    color: '#fff',
+                                    fontFamily: 'inherit',
+                                    fontSize: '14px',
+                                    lineHeight: 1.4,
+                                }}
+                            />
+                        </Field>
                         <Focusable style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '12px' }}>
                             <DialogButton onClick={cancelEditing}>Cancel</DialogButton>
                             <DialogButton onClick={applyEditor} disabled={!alias.trim() || !definition.trim()}>

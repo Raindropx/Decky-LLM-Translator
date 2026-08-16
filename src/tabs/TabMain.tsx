@@ -5,17 +5,12 @@ import {
     PanelSection,
     PanelSectionRow,
     ToggleField,
-    Router,
-    Navigation,
-    DialogButton,
-    Focusable
+    Router
 } from "@decky/ui";
 
 import { VFC } from "react";
 import { BsTranslate, BsXLg, BsEye, BsStars } from "react-icons/bs";
-import { SiKofi } from "react-icons/si";
-import { HiQrCode, HiInboxArrowDown } from "react-icons/hi2";
-import showQrModal from "../showQrModal";
+import { HiInboxArrowDown, HiMagnifyingGlass } from "react-icons/hi2";
 import { useSettings } from "../SettingsContext";
 import { GameTranslatorLogic } from "../Translator";
 import { logger } from "../Logger";
@@ -116,6 +111,13 @@ export const TabMain: VFC<TabMainProps> = ({ logic, overlayVisible, providerStat
         }, 200);
     };
 
+    const handleOcrTestClick = () => {
+        Router.CloseSideMenus();
+        setTimeout(() => {
+            logic.takeScreenshotAndTestOcr().catch(err => logger.error('TabMain', 'OCR test failed', err));
+        }, 200);
+    };
+
     const renderButtonContent = () => {
         if (overlayVisible) {
             return <span style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}><BsXLg /> Close Overlay</span>;
@@ -146,6 +148,19 @@ export const TabMain: VFC<TabMainProps> = ({ logic, overlayVisible, providerStat
                                 layout="below"
                                 onClick={handleButtonClick}>
                                 {renderButtonContent()}
+                            </ButtonItem>
+                        </PanelSectionRow>
+
+                        <PanelSectionRow>
+                            <ButtonItem
+                                bottomSeparator="standard"
+                                layout="below"
+                                disabled={settings.ocrProvider === 'legacy_gemini_vision'}
+                                onClick={handleOcrTestClick}
+                            >
+                                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '7px' }}>
+                                    <HiMagnifyingGlass /> Test OCR
+                                </span>
                             </ButtonItem>
                         </PanelSectionRow>
 
@@ -337,39 +352,6 @@ export const TabMain: VFC<TabMainProps> = ({ logic, overlayVisible, providerStat
                     </>
                 )}
 
-                {/* Ko-fi Support Button */}
-                <PanelSectionRow>
-                    <div
-                        style={{
-                            display: 'flex',
-                            justifyContent: 'center',
-                            marginTop: '12px',
-                        }}
-                    >
-                        <Focusable>
-                            <DialogButton
-                                onClick={() => {
-                                    Navigation.CloseSideMenus();
-                                    Navigation.NavigateToExternalWeb('https://ko-fi.com/alexanderdev');
-                                }}
-                                onSecondaryButton={() => showQrModal('https://ko-fi.com/alexanderdev')}
-                                onSecondaryActionDescription="Show QR Code"
-                                style={{
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    gap: '8px',
-                                    padding: '6px 12px',
-                                    fontSize: '11px',
-                                    minWidth: 'auto',
-                                }}
-                            >
-                                <SiKofi style={{ fontSize: '13px' }} />
-                                <span>Support on Ko-fi</span>
-                                <HiQrCode style={{ fontSize: '13px', opacity: 0.6 }} />
-                            </DialogButton>
-                        </Focusable>
-                    </div>
-                </PanelSectionRow>
             </PanelSection>
         </div>
     );
