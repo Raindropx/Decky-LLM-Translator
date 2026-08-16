@@ -293,35 +293,12 @@ const CustomLanguagesModal: VFC<{
                             value={alias}
                             onChange={(event) => setAlias(event.target.value)}
                         />
-                        <Field
+                        <TextField
                             label="Definition"
                             description="Exact target-language instruction sent to the LLM"
-                            childrenContainerWidth="max"
-                            childrenLayout="below"
-                        >
-                            <textarea
-                                aria-label="Definition"
-                                value={definition}
-                                maxLength={2000}
-                                rows={5}
-                                onChange={(event) => setDefinition(event.target.value)}
-                                style={{
-                                    width: '100%',
-                                    minHeight: '112px',
-                                    boxSizing: 'border-box',
-                                    marginTop: '8px',
-                                    padding: '10px 12px',
-                                    resize: 'vertical',
-                                    border: '1px solid rgba(255,255,255,0.22)',
-                                    borderRadius: '2px',
-                                    background: 'rgba(0,0,0,0.3)',
-                                    color: '#fff',
-                                    fontFamily: 'inherit',
-                                    fontSize: '14px',
-                                    lineHeight: 1.4,
-                                }}
-                            />
-                        </Field>
+                            value={definition}
+                            onChange={(event) => setDefinition(event.target.value.slice(0, 2000))}
+                        />
                         <Focusable style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '12px' }}>
                             <DialogButton onClick={cancelEditing}>Cancel</DialogButton>
                             <DialogButton onClick={applyEditor} disabled={!alias.trim() || !definition.trim()}>
