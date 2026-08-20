@@ -30,7 +30,7 @@ const languageOptions = [
     { label: '🇸🇦 Arabic', data: 'ar' },
     { label: '🇧🇬 Bulgarian', data: 'bg' },
     { label: '🇨🇳 Chinese (Simplified)', data: 'zh-CN' },
-    { label: '🇹🇼 Chinese (Traditional)', data: 'zh-TW' },
+    { label: '🇨🇳 Chinese (Traditional)', data: 'zh-TW' },
     { label: '🇭🇷 Croatian', data: 'hr' },
     { label: '🇨🇿 Czech', data: 'cs' },
     { label: '🇩🇰 Danish', data: 'da' },

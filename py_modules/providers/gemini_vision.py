@@ -19,29 +19,13 @@ from .base import (
     RateLimitError,
     classify_google_error,
 )
+from .language_names import LANGUAGE_NAMES, language_name_for_llm
 
 logger = logging.getLogger(__name__)
 
 GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models"
 DEFAULT_MODEL = "gemini-2.5-flash"
 REQUEST_TIMEOUT = 30
-
-# Language code to natural name for the prompt
-LANG_NAMES = {
-    "auto": "auto-detect",
-    "en": "English", "ja": "Japanese", "ko": "Korean",
-    "zh-CN": "Simplified Chinese", "zh-TW": "Traditional Chinese",
-    "de": "German", "fr": "French", "es": "Spanish",
-    "it": "Italian", "pt": "Portuguese", "nl": "Dutch",
-    "pl": "Polish", "tr": "Turkish", "ro": "Romanian",
-    "vi": "Vietnamese", "fi": "Finnish", "ru": "Russian",
-    "uk": "Ukrainian", "el": "Greek", "th": "Thai",
-    "bg": "Bulgarian", "ar": "Arabic", "hi": "Hindi",
-    "id": "Indonesian", "ms": "Malay", "sv": "Swedish",
-    "da": "Danish", "no": "Norwegian", "cs": "Czech",
-    "hu": "Hungarian", "he": "Hebrew", "hr": "Croatian",
-}
-
 
 def _get_png_dimensions(data: bytes) -> tuple:
     """Extract width and height from a PNG file header."""
@@ -170,7 +154,7 @@ class LegacyGeminiVisionProvider(OCRProvider):
         return bool(self._api_key)
 
     def get_supported_languages(self) -> List[str]:
-        return list(LANG_NAMES.keys())
+        return list(LANGUAGE_NAMES.keys())
 
     def _build_system_instruction(self) -> str:
         return (
@@ -180,11 +164,11 @@ class LegacyGeminiVisionProvider(OCRProvider):
         )
 
     def _build_prompt(self, source_lang: str, target_lang: str) -> str:
-        tgt_name = LANG_NAMES.get(target_lang, target_lang)
+        tgt_name = language_name_for_llm(target_lang)
 
         source_hint = ""
         if source_lang and source_lang != "auto":
-            src_name = LANG_NAMES.get(source_lang, source_lang)
+            src_name = language_name_for_llm(source_lang)
             source_hint = f" The source language is {src_name}."
 
         prompt = (

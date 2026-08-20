@@ -17,6 +17,7 @@ from typing import Dict, Iterable, List, Optional
 from urllib.parse import urlparse
 
 from .base import ApiKeyError, NetworkError, RateLimitError
+from .language_names import language_name_for_llm
 
 
 logger = logging.getLogger(__name__)
@@ -110,6 +111,17 @@ def build_ocr_items(blocks: List[dict]) -> List[dict]:
             item["ocrConfidence"] = round(float(confidence), 4)
         items.append(item)
     return items
+
+
+def build_translation_request(
+    blocks: List[dict], target_language: str, source_language: str = "auto"
+) -> dict:
+    """Build the model-facing request using names for built-ins and exact custom definitions."""
+    return {
+        "sourceLanguage": language_name_for_llm(source_language or "auto"),
+        "targetLanguage": language_name_for_llm(target_language),
+        "ocrItems": build_ocr_items(blocks),
+    }
 
 
 def _annotate_screenshot(image_bytes: bytes, blocks: List[dict]) -> bytes:
@@ -226,16 +238,9 @@ class OpenAICompatibleLLMProvider:
         if vision_enabled and not screenshot_bytes:
             raise LLMConfigurationError("Vision is enabled but no screenshot is available")
 
-        items = build_ocr_items(blocks)
-        user_text = json.dumps(
-            {
-                "sourceLanguage": source_language or "auto",
-                "targetLanguage": target_language,
-                "ocrItems": items,
-            },
-            ensure_ascii=False,
-            separators=(",", ":"),
-        )
+        request_data = build_translation_request(blocks, target_language, source_language)
+        items = request_data["ocrItems"]
+        user_text = json.dumps(request_data, ensure_ascii=False, separators=(",", ":"))
 
         if vision_enabled:
             annotated = _annotate_screenshot(screenshot_bytes or b"", blocks)

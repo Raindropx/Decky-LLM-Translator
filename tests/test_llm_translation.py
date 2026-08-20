@@ -17,7 +17,7 @@ package = types.ModuleType(TEST_PACKAGE)
 package.__path__ = [str(PROVIDER_DIR)]
 sys.modules[TEST_PACKAGE] = package
 
-for module_name in ("base", "llm_translation"):
+for module_name in ("base", "language_names", "llm_translation"):
     spec = importlib.util.spec_from_file_location(
         f"{TEST_PACKAGE}.{module_name}", PROVIDER_DIR / f"{module_name}.py"
     )
@@ -33,6 +33,7 @@ from decky_llm_test_providers.llm_translation import (
     _annotate_screenshot_with_bundled_python,
     _chat_completions_url,
     build_ocr_items,
+    build_translation_request,
     parse_translation_json,
 )
 
@@ -88,6 +89,26 @@ class LLMTranslationTests(unittest.TestCase):
                 {"id": "ocr-2", "ocrText": "Alduin"},
             ],
         )
+
+    def test_model_request_expands_builtin_language_codes(self):
+        request = build_translation_request(
+            [{"id": "ocr-1", "text": "Terve"}],
+            target_language="zh-TW",
+            source_language="fi",
+        )
+
+        self.assertEqual(request["sourceLanguage"], "Finnish")
+        self.assertEqual(request["targetLanguage"], "Traditional Chinese")
+
+    def test_model_request_preserves_custom_language_definition(self):
+        definition = "Traditional Chinese using Hong Kong vocabulary"
+        request = build_translation_request(
+            [{"id": "ocr-1", "text": "Save"}],
+            target_language=definition,
+        )
+
+        self.assertEqual(request["sourceLanguage"], "auto-detect")
+        self.assertEqual(request["targetLanguage"], definition)
 
     @unittest.skipIf(Image is None, "Pillow is not installed in the host test environment")
     def test_annotated_screenshot_is_compressed_jpeg(self):
