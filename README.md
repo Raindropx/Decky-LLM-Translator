@@ -1,5 +1,7 @@
 # Decky LLM Translator
 
+**English** | [简体中文](README.zh-CN.md)
+
 Decky LLM Translator is a fork of
 [Decky Translator](https://github.com/cat-in-a-box/Decky-Translator) that keeps
 its screenshot, OCR and overlay pipeline while replacing conventional machine
@@ -9,6 +11,12 @@ The fork is intentionally a separate plugin. Players can install and enable it
 alongside the upstream Decky Translator: use the upstream plugin for its free
 translation engines, or use this plugin when LLM translation and optional
 visual context are preferred.
+
+## Interface languages
+
+The plugin interface is available in English and Simplified Chinese. By
+default, it follows the Steam system language; it can also be set explicitly
+under **Controls > Interface > Plugin Language**.
 
 ## Translation pipeline
 
