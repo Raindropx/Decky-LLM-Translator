@@ -24,6 +24,7 @@ import { LLMEndpointSection } from '../LLMEndpoints';
 import { logger } from '../Logger';
 import { CustomLanguage, useSettings } from '../SettingsContext';
 import { GameTranslatorLogic } from '../Translator';
+import { t } from '../i18n';
 
 const languageOptions = [
     { label: '🌐 Auto-detect', data: 'auto' },
@@ -86,7 +87,7 @@ const ApiKeyModal: VFC<{
                 <h2>{title}</h2>
                 <p style={{ color: '#aaa', fontSize: '13px' }}>{description}</p>
                 <TextField
-                    label="API Key"
+                    label={t("API Key")}
                     value={key}
                     bIsPassword
                     bShowClearAction
@@ -94,9 +95,9 @@ const ApiKeyModal: VFC<{
                 />
                 <ApiKeyTransferHint />
                 <Focusable style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '18px' }}>
-                    <DialogButton onClick={closeModal}>Cancel</DialogButton>
+                    <DialogButton onClick={closeModal}>{t("Cancel")}</DialogButton>
                     <DialogButton onClick={() => { onSave(key.trim()); closeModal?.(); }} disabled={!key.trim()}>
-                        Save
+                        {t("Save")}
                     </DialogButton>
                 </Focusable>
             </div>
@@ -144,29 +145,29 @@ const CustomLanguagesModal: VFC<{
         const trimmedAlias = alias.trim();
         const trimmedDefinition = definition.trim();
         if (!trimmedAlias || !trimmedDefinition) {
-            setError('Alias and definition are required.');
+            setError(t('Alias and definition are required.'));
             return;
         }
         if (trimmedAlias.length > 80) {
-            setError('Alias must be 80 characters or fewer.');
+            setError(t('Alias must be 80 characters or fewer.'));
             return;
         }
         if (trimmedDefinition.length > 2000) {
-            setError('Definition must be 2000 characters or fewer.');
+            setError(t('Definition must be 2000 characters or fewer.'));
             return;
         }
         if (builtInOutputLanguageValues.has(trimmedDefinition)) {
-            setError('This definition is already used by a built-in output language.');
+            setError(t('This definition is already used by a built-in output language.'));
             return;
         }
         if (draftLanguages.some((item, index) => index !== editingIndex
             && item.alias.toLocaleLowerCase() === trimmedAlias.toLocaleLowerCase())) {
-            setError('Each custom language needs a unique alias.');
+            setError(t('Each custom language needs a unique alias.'));
             return;
         }
         if (draftLanguages.some((item, index) => index !== editingIndex
             && item.definition === trimmedDefinition)) {
-            setError('Each custom language needs a unique definition.');
+            setError(t('Each custom language needs a unique definition.'));
             return;
         }
 
@@ -192,9 +193,9 @@ const CustomLanguagesModal: VFC<{
         setError('');
         try {
             if (await onSave(draftLanguages, nextTargetLanguage)) closeModal?.();
-            else setError('Could not save custom languages.');
+            else setError(t('Could not save custom languages.'));
         } catch (saveError) {
-            setError(saveError instanceof Error ? saveError.message : 'Could not save custom languages.');
+            setError(saveError instanceof Error ? saveError.message : t('Could not save custom languages.'));
         } finally {
             setSaving(false);
         }
@@ -203,15 +204,15 @@ const CustomLanguagesModal: VFC<{
     return (
         <ModalRoot onCancel={closeModal} onEscKeypress={closeModal}>
             <div style={{ padding: '20px', minWidth: '460px', maxWidth: '620px' }}>
-                <h2>Custom Output Languages</h2>
+                <h2>{t("Custom Output Languages")}</h2>
                 <p style={{ color: '#aaa', fontSize: '13px', lineHeight: 1.45 }}>
-                    The alias appears in the output-language list. The definition is sent to the LLM as the target language.
+                    {t("The alias appears in the output-language list. The definition is sent to the LLM as the target language.")}
                 </p>
 
                 <div style={{ maxHeight: '280px', overflowY: 'auto', margin: '14px 0' }}>
                     {!draftLanguages.length && (
                         <div style={{ color: '#888', fontSize: '13px', padding: '12px 0' }}>
-                            No custom output languages yet.
+                            {t("No custom output languages yet.")}
                         </div>
                     )}
                     {draftLanguages.map((language, index) => (
@@ -245,7 +246,7 @@ const CustomLanguagesModal: VFC<{
                             </div>
                             <DialogButton
                                 onClick={() => startEditing(index)}
-                                aria-label={`Edit ${language.alias}`}
+                                aria-label={t('Edit {name}', { name: language.alias })}
                                 style={{
                                     width: '44px',
                                     height: '36px',
@@ -260,7 +261,7 @@ const CustomLanguagesModal: VFC<{
                             </DialogButton>
                             <DialogButton
                                 onClick={() => deleteLanguage(index)}
-                                aria-label={`Delete ${language.alias}`}
+                                aria-label={t('Delete {name}', { name: language.alias })}
                                 style={{
                                     width: '44px',
                                     height: '36px',
@@ -281,28 +282,28 @@ const CustomLanguagesModal: VFC<{
                 {editingIndex === null ? (
                     <DialogButton onClick={startAdding} disabled={draftLanguages.length >= 50}>
                         <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
-                            <HiPlus /> Add Language
+                            <HiPlus /> {t("Add Language")}
                         </span>
                     </DialogButton>
                 ) : (
                     <div style={{ padding: '12px', background: 'rgba(0,0,0,0.18)', borderRadius: '4px' }}>
-                        <h3 style={{ marginTop: 0 }}>{editingIndex < draftLanguages.length ? 'Edit Language' : 'Add Language'}</h3>
+                        <h3 style={{ marginTop: 0 }}>{editingIndex < draftLanguages.length ? t('Edit Language') : t('Add Language')}</h3>
                         <TextField
-                            label="Alias"
-                            description="Short name shown in the output-language list"
+                            label={t("Alias")}
+                            description={t("Short name shown in the output-language list")}
                             value={alias}
                             onChange={(event) => setAlias(event.target.value)}
                         />
                         <TextField
-                            label="Definition"
-                            description="Exact target-language instruction sent to the LLM"
+                            label={t("Definition")}
+                            description={t("Exact target-language instruction sent to the LLM")}
                             value={definition}
                             onChange={(event) => setDefinition(event.target.value.slice(0, 2000))}
                         />
                         <Focusable style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '12px' }}>
-                            <DialogButton onClick={cancelEditing}>Cancel</DialogButton>
+                            <DialogButton onClick={cancelEditing}>{t("Cancel")}</DialogButton>
                             <DialogButton onClick={applyEditor} disabled={!alias.trim() || !definition.trim()}>
-                                Apply
+                                {t("Apply")}
                             </DialogButton>
                         </Focusable>
                     </div>
@@ -310,9 +311,9 @@ const CustomLanguagesModal: VFC<{
 
                 {error && <div style={{ color: '#ff6b6b', fontSize: '12px', marginTop: '10px' }}>{error}</div>}
                 <Focusable style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '18px' }}>
-                    <DialogButton onClick={closeModal}>Cancel</DialogButton>
+                    <DialogButton onClick={closeModal}>{t("Cancel")}</DialogButton>
                     <DialogButton onClick={save} disabled={saving || editingIndex !== null}>
-                        {saving ? 'Saving…' : 'Save'}
+                        {saving ? t('Saving…') : t('Save')}
                     </DialogButton>
                 </Focusable>
             </div>
@@ -348,19 +349,19 @@ const OcrModelAction: VFC<{
     return (
         <div ref={actionRef} tabIndex={-1} style={{ width: '100%', marginTop: '8px' }}>
             <div style={{ color: status.downloaded ? '#81c784' : '#ffb74d', fontSize: '12px', marginBottom: '6px' }}>
-                {status.downloading ? `Installing… ${Math.round((status.progress || 0) * 100)}%`
-                    : status.downloaded ? 'OCR model installed' : 'OCR model download required'}
+                {status.downloading ? t('Installing… {progress}%', { progress: Math.round((status.progress || 0) * 100) })
+                    : status.downloaded ? t('OCR model installed') : t('OCR model download required')}
             </div>
-            {status.error && <div style={{ color: '#ff6b6b', fontSize: '11px' }}>{status.error}</div>}
+            {status.error && <div style={{ color: '#ff6b6b', fontSize: '11px' }}>{t(status.error)}</div>}
             <Focusable style={{ display: 'flex', gap: '8px' }}>
                 {!status.downloaded && (
                     <DialogButton onClick={async () => { await call(downloadMethod); await refresh(); }} disabled={status.downloading}>
-                        <HiInboxArrowDown /> Install
+                        <HiInboxArrowDown /> {t("Install")}
                     </DialogButton>
                 )}
                 {status.downloaded && (
                     <DialogButton onClick={async () => { await call(deleteMethod); await refresh(); }}>
-                        <HiTrash /> Delete
+                        <HiTrash /> {t("Delete")}
                     </DialogButton>
                 )}
             </Focusable>
@@ -379,9 +380,15 @@ export const TabTranslation: VFC<TabTranslationProps> = ({ logic, scrollTarget, 
     const chromeActionRef = useRef<HTMLDivElement>(null);
     const rapidActionRef = useRef<HTMLDivElement>(null);
     const legacyMode = settings.ocrProvider === 'legacy_gemini_vision';
+    const localizeLanguageOption = (item: { label: string; data: string }) => {
+        const separator = item.label.indexOf(' ');
+        if (separator < 0) return { ...item, label: t(item.label) };
+        const prefix = item.label.slice(0, separator + 1);
+        return { ...item, label: `${prefix}${t(item.label.slice(separator + 1))}` };
+    };
     const outputLanguageOptions = [
-        selectLanguageOption,
-        ...builtInOutputLanguageOptions,
+        { ...selectLanguageOption, label: t(selectLanguageOption.label) },
+        ...builtInOutputLanguageOptions.map(localizeLanguageOption),
         ...settings.customLanguages.map((language) => ({
             label: language.alias,
             data: language.definition,
@@ -389,10 +396,10 @@ export const TabTranslation: VFC<TabTranslationProps> = ({ logic, scrollTarget, 
     ];
 
     const inputOptions = [
-        selectLanguageOption,
+        { ...selectLanguageOption, label: t(selectLanguageOption.label) },
         ...(settings.ocrProvider === 'rapidocr'
-            ? languageOptions.filter((item) => item.data === 'auto' || rapidocrLanguages.has(item.data))
-            : languageOptions),
+            ? languageOptions.filter((item) => item.data === 'auto' || rapidocrLanguages.has(item.data)).map(localizeLanguageOption)
+            : languageOptions.map(localizeLanguageOption)),
     ];
 
     useEffect(() => {
@@ -416,15 +423,15 @@ export const TabTranslation: VFC<TabTranslationProps> = ({ logic, scrollTarget, 
 
     const openGoogleKey = () => showModal(
         <ApiKeyModal
-            title="Google Cloud OCR API Key"
-            description="Used only for Google Cloud Vision OCR. The key is write-only after saving."
+            title={t("Google Cloud OCR API Key")}
+            description={t("Used only for Google Cloud Vision OCR. The key is write-only after saving.")}
             onSave={(key) => updateSetting('googleApiKey', key, 'Google OCR API key')}
         />
     );
     const openLegacyGeminiKey = () => showModal(
         <ApiKeyModal
-            title="Legacy Gemini Vision API Key"
-            description="Used only by the retained combined OCR + translation mode. The key is write-only after saving."
+            title={t("Legacy Gemini Vision API Key")}
+            description={t("Used only by the retained combined OCR + translation mode. The key is write-only after saving.")}
             onSave={(key) => updateSetting('geminiApiKey', key, 'Legacy Gemini API key')}
         />
     );
@@ -454,12 +461,12 @@ export const TabTranslation: VFC<TabTranslationProps> = ({ logic, scrollTarget, 
 
     return (
         <div style={{ paddingBottom: '40px' }}>
-            <PanelSection title="Languages">
+            <PanelSection title={t("Languages")}>
                 <PanelSectionRow>
                     <DropdownItem
                         layout="below"
-                        label="Input Language"
-                        description="Source language for OCR; use auto-detect if unsure"
+                        label={t("Input Language")}
+                        description={t("Source language for OCR; use auto-detect if unsure")}
                         rgOptions={inputOptions}
                         selectedOption={settings.inputLanguage}
                         onChange={(option: any) => updateSetting('inputLanguage', option.data, 'Input language')}
@@ -468,8 +475,8 @@ export const TabTranslation: VFC<TabTranslationProps> = ({ logic, scrollTarget, 
                 <PanelSectionRow>
                     <DropdownItem
                         layout="below"
-                        label="Output Language"
-                        description="Target language for LLM translation"
+                        label={t("Output Language")}
+                        description={t("Target language for LLM translation")}
                         rgOptions={outputLanguageOptions}
                         selectedOption={settings.targetLanguage}
                         onChange={(option: any) => updateSetting('targetLanguage', option.data, 'Output language')}
@@ -478,27 +485,27 @@ export const TabTranslation: VFC<TabTranslationProps> = ({ logic, scrollTarget, 
                 <PanelSectionRow>
                     <ButtonItem
                         layout="below"
-                        label="Custom Languages"
-                        description="Add output styles and languages that are not in the built-in list"
+                        label={t("Custom Languages")}
+                        description={t("Add output styles and languages that are not in the built-in list")}
                         onClick={openCustomLanguages}
                     >
-                        Manage Custom Languages
+                        {t("Manage Custom Languages")}
                     </ButtonItem>
                 </PanelSectionRow>
             </PanelSection>
 
-            <PanelSection title="Recognition">
+            <PanelSection title={t("Recognition")}>
                 <PanelSectionRow>
-                    <Field label="Text Recognition Method" childrenContainerWidth="max" childrenLayout="below">
+                    <Field label={t("Text Recognition Method")} childrenContainerWidth="max" childrenLayout="below">
                         <Focusable style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                             <div style={{ flex: 1 }}>
                                 <Dropdown
                                     rgOptions={[
-                                        { label: 'On-Device (Chrome)', data: 'chromescreenai' },
-                                        { label: 'On-Device (RapidOCR)', data: 'rapidocr' },
+                                        { label: t('On-Device (Chrome)'), data: 'chromescreenai' },
+                                        { label: t('On-Device (RapidOCR)'), data: 'rapidocr' },
                                         { label: 'OCR.space', data: 'ocrspace' },
                                         { label: 'Google Cloud Vision', data: 'googlecloud' },
-                                        { label: <span>Legacy Gemini Vision (Combined) <BsStars /></span>, data: 'legacy_gemini_vision' },
+                                        { label: <span>{t('Legacy Gemini Vision (Combined)')} <BsStars /></span>, data: 'legacy_gemini_vision' },
                                     ]}
                                     selectedOption={settings.ocrProvider}
                                     onChange={(option: any) => updateSetting('ocrProvider', option.data, 'OCR provider')}
@@ -522,8 +529,8 @@ export const TabTranslation: VFC<TabTranslationProps> = ({ logic, scrollTarget, 
                     <PanelSectionRow>
                         <DropdownItem
                             layout="below"
-                            label="Legacy Gemini Model"
-                            description="This mode lets Gemini detect boxes and translate in one request"
+                            label={t("Legacy Gemini Model")}
+                            description={t("This mode lets Gemini detect boxes and translate in one request")}
                             rgOptions={geminiModels}
                             selectedOption={settings.geminiModel}
                             onChange={(option: any) => updateSetting('geminiModel', option.data, 'Legacy Gemini model')}
@@ -555,8 +562,8 @@ export const TabTranslation: VFC<TabTranslationProps> = ({ logic, scrollTarget, 
                 {settings.ocrProvider === 'chromescreenai' && (
                     <PanelSectionRow>
                         <ToggleField
-                            label="Faster Recognition"
-                            description="Keep Chrome Screen AI loaded between translations"
+                            label={t("Faster Recognition")}
+                            description={t("Keep Chrome Screen AI loaded between translations")}
                             checked={settings.chromeScreenAiPersistentMode}
                             onChange={(value) => updateSetting('chromeScreenAiPersistentMode', value, 'Faster recognition')}
                         />
@@ -565,8 +572,8 @@ export const TabTranslation: VFC<TabTranslationProps> = ({ logic, scrollTarget, 
                 {settings.ocrProvider === 'rapidocr' && (
                     <PanelSectionRow>
                         <ToggleField
-                            label="Faster Recognition"
-                            description="Keep RapidOCR loaded between translations"
+                            label={t("Faster Recognition")}
+                            description={t("Keep RapidOCR loaded between translations")}
                             checked={settings.rapidocrPersistentMode}
                             onChange={(value) => updateSetting('rapidocrPersistentMode', value, 'Faster recognition')}
                         />
@@ -578,7 +585,7 @@ export const TabTranslation: VFC<TabTranslationProps> = ({ logic, scrollTarget, 
                         <PanelSectionRow>
                             <SliderField
                                 min={0.1} max={0.95} step={0.05}
-                                label="OCR Confidence"
+                                label={t("OCR Confidence")}
                                 value={settings.rapidocrConfidence}
                                 showValue
                                 onChange={(value) => updateSetting('rapidocrConfidence', value, 'RapidOCR confidence')}
@@ -587,7 +594,7 @@ export const TabTranslation: VFC<TabTranslationProps> = ({ logic, scrollTarget, 
                         <PanelSectionRow>
                             <SliderField
                                 min={0.1} max={0.95} step={0.05}
-                                label="Box Detection Threshold"
+                                label={t("Box Detection Threshold")}
                                 value={settings.rapidocrBoxThresh}
                                 showValue
                                 onChange={(value) => updateSetting('rapidocrBoxThresh', value, 'RapidOCR box threshold')}
@@ -599,15 +606,15 @@ export const TabTranslation: VFC<TabTranslationProps> = ({ logic, scrollTarget, 
                 <PanelSectionRow>
                     <ButtonItem
                         layout="below"
-                        label="OCR Test"
+                        label={t("OCR Test")}
                         description={legacyMode
-                            ? "Unavailable because Legacy Gemini Vision combines recognition and translation"
-                            : "Capture the current game and show recognized text without calling the translation endpoint"}
+                            ? t("Unavailable because Legacy Gemini Vision combines recognition and translation")
+                            : t("Capture the current game and show recognized text without calling the translation endpoint")}
                         disabled={!settings.enabled || legacyMode}
                         onClick={runOcrTest}
                     >
                         <span style={{ display: 'inline-flex', alignItems: 'center', gap: '7px' }}>
-                            <HiMagnifyingGlass /> Test OCR
+                            <HiMagnifyingGlass /> {t("Test OCR")}
                         </span>
                     </ButtonItem>
                 </PanelSectionRow>

@@ -8,6 +8,7 @@ import { TranslatedRegion } from "./TextTranslator";
 import { logger } from "./Logger";
 import { buildTranslatedFontFamily, ensureFontLoaded, resolveFontStyleCSS } from "./fonts";
 import type { FontStyleOption } from "./fonts";
+import { t } from "./i18n";
 
 export type HorizontalTextAlignment = 'left' | 'right' | 'center' | 'justify';
 
@@ -113,7 +114,7 @@ export class ImageState {
         // Set internal state immediately
         this.visible = true;
         this.loading = true;
-        this.processingStep = step;
+        this.processingStep = t(step);
         this.processingDetail = "";
         this.processingIsError = false;
         this.translationsVisible = true; // Reset to visible when starting new translation
@@ -226,8 +227,8 @@ export class ImageState {
 
     // Update the current processing step
     updateProcessingStep(step: string, isError: boolean = false, detail: string = ""): void {
-        this.processingStep = step;
-        this.processingDetail = detail;
+        this.processingStep = t(step);
+        this.processingDetail = t(detail);
         this.processingIsError = isError;
         // Update the loading state and keep the current image displayed
         this.loading = true;
@@ -599,7 +600,7 @@ export const TranslatedTextOverlay: VFC<{
                                 : translationsVisible ? "1px solid #f44336" : "1px solid #ffc107",
                             imageRendering: "pixelated"
                         }}
-                        alt="Screenshot"
+                        alt={t("Screenshot")}
                     />
 
                     {/* Overlay translated text boxes with adaptive font sizing */}

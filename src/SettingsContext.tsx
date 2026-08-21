@@ -5,6 +5,7 @@ import { GameTranslatorLogic } from './Translator';
 import { InputMode } from './Input';
 import { logger } from './Logger';
 import type { LLMEndpoint } from './LLMEndpoints';
+import { normalizePluginLanguage, PluginLanguage, setPluginLanguage, t } from './i18n';
 
 export interface CustomLanguage {
     alias: string;
@@ -13,6 +14,7 @@ export interface CustomLanguage {
 
 // Define the settings interface
 export interface Settings {
+    pluginLanguage: PluginLanguage;
     inputLanguage: string;
     targetLanguage: string;
     customLanguages: CustomLanguage[];
@@ -58,6 +60,7 @@ type SettingsAction =
 
 // Define the initial state
 const initialSettings: Settings = {
+    pluginLanguage: "system",
     inputLanguage: "",
     targetLanguage: "",
     customLanguages: [],
@@ -167,6 +170,7 @@ export const SettingsProvider: React.FC<SettingsProviderProps> = ({
 
                 // Map backend settings to frontend settings
                 const mappedSettings: Partial<Settings> = {
+                    pluginLanguage: normalizePluginLanguage(serverSettings.plugin_language),
                     inputLanguage: serverSettings.input_language,
                     targetLanguage: serverSettings.target_language,
                     customLanguages: serverSettings.custom_languages ?? [],
@@ -202,6 +206,8 @@ export const SettingsProvider: React.FC<SettingsProviderProps> = ({
                     llmEndpoints: serverSettings.llm_endpoints ?? [],
                     selectedLlmEndpointId: serverSettings.selected_llm_endpoint_id ?? '',
                 };
+
+                setPluginLanguage(mappedSettings.pluginLanguage ?? 'system');
 
                 // Update settings in context
                 dispatch({ type: 'INITIALIZE_SETTINGS', settings: mappedSettings });
@@ -268,6 +274,7 @@ export const SettingsProvider: React.FC<SettingsProviderProps> = ({
 
             // Map frontend setting key to backend setting key
             const backendKeyMap: Record<keyof Settings, string> = {
+                pluginLanguage: 'plugin_language',
                 inputLanguage: 'input_language',
                 targetLanguage: 'target_language',
                 customLanguages: 'custom_languages',
@@ -312,6 +319,9 @@ export const SettingsProvider: React.FC<SettingsProviderProps> = ({
 
             // Update logic based on setting type
             switch (key) {
+                case 'pluginLanguage':
+                    setPluginLanguage(value);
+                    break;
                 case 'inputLanguage':
                     logic.setInputLanguage(value);
                     break;
@@ -394,13 +404,15 @@ export const SettingsProvider: React.FC<SettingsProviderProps> = ({
                 return true;
             } else {
                 if (
-                    key === 'customLanguages'
+                    key === 'pluginLanguage'
+                    || key === 'customLanguages'
                     || key === 'targetLanguage'
                     || key === 'steamScreenshotTranslationEnabled'
                     || key === 'steamScreenshotKeepOriginal'
                 ) {
                     dispatch({ type: 'UPDATE_SETTING', key, value: previousValue });
                 }
+                if (key === 'pluginLanguage') setPluginLanguage(previousValue as PluginLanguage);
                 if (key === 'targetLanguage') logic.setTargetLanguage(previousValue as string);
                 if (key === 'steamScreenshotTranslationEnabled') {
                     logic.setSteamScreenshotTranslationEnabled(previousValue as boolean);
@@ -408,18 +420,20 @@ export const SettingsProvider: React.FC<SettingsProviderProps> = ({
                 if (key === 'steamScreenshotKeepOriginal') {
                     logic.setSteamScreenshotKeepOriginal(previousValue as boolean);
                 }
-                logic.notify(`Failed to update ${label || key}`, 2000);
+                logic.notify(t('Failed to update {setting}', { setting: label || key }), 2000);
                 return false;
             }
         } catch (error) {
             if (
-                key === 'customLanguages'
+                key === 'pluginLanguage'
+                || key === 'customLanguages'
                 || key === 'targetLanguage'
                 || key === 'steamScreenshotTranslationEnabled'
                 || key === 'steamScreenshotKeepOriginal'
             ) {
                 dispatch({ type: 'UPDATE_SETTING', key, value: previousValue });
             }
+            if (key === 'pluginLanguage') setPluginLanguage(previousValue as PluginLanguage);
             if (key === 'targetLanguage') logic.setTargetLanguage(previousValue as string);
             if (key === 'steamScreenshotTranslationEnabled') {
                 logic.setSteamScreenshotTranslationEnabled(previousValue as boolean);
@@ -428,7 +442,7 @@ export const SettingsProvider: React.FC<SettingsProviderProps> = ({
                 logic.setSteamScreenshotKeepOriginal(previousValue as boolean);
             }
             logger.error('SettingsContext', `Failed to update ${key}`, error);
-            logic.notify(`Failed to update ${label || key}`, 2000);
+            logic.notify(t('Failed to update {setting}', { setting: label || key }), 2000);
             return false;
         }
     };

@@ -12,6 +12,7 @@ import {
     renderTranslatedSteamScreenshot,
     SteamScreenshotResponse,
 } from "./SteamScreenshot";
+import { t } from "./i18n";
 
 // Screenshot response interface
 export interface ScreenshotResponse {
@@ -334,8 +335,8 @@ export class GameTranslatorLogic {
 
     notify = async (message: string, duration: number = 1000, body?: string): Promise<void> => {
         toaster.toast({
-            title: message,
-            body: body || message,
+            title: t(message),
+            body: t(body || message),
             duration: duration,
             critical: true
         });
@@ -800,7 +801,7 @@ export class GameTranslatorLogic {
     }
 
     private translationMethodHint(): string {
-        return "Selected LLM endpoint";
+        return t("Selected LLM endpoint");
     }
 
     private ocrMethodHint(): string {
@@ -811,7 +812,7 @@ export class GameTranslatorLogic {
             googlecloud: "Google Cloud",
             legacy_gemini_vision: "Legacy Gemini Vision",
         };
-        return labels[this.ocrProvider] || this.ocrProvider;
+        return t(labels[this.ocrProvider] || this.ocrProvider);
     }
 
     setHasGoogleApiKey = (hasKey: boolean): void => {

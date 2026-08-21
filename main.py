@@ -1462,6 +1462,9 @@ class Plugin:
                 pass  # frontend-only, just persist to settings file
             elif key == "custom_recognition_settings":
                 pass  # frontend-only, just persist to settings file
+            elif key == "plugin_language":
+                if value not in {"system", "en", "zh-CN"}:
+                    raise ValueError("Unsupported plugin language")
             elif key == "debug_mode":
                 logger.setLevel(logging.DEBUG if value else logging.INFO)
             elif key == "use_free_providers":
@@ -1509,6 +1512,7 @@ class Plugin:
     async def get_all_settings(self):
         try:
             settings = {
+                "plugin_language": self._settings.get_setting("plugin_language", "system"),
                 "target_language": self._target_language,
                 "input_language": self._input_language,
                 "custom_languages": self._custom_languages,

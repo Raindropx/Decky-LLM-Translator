@@ -13,6 +13,7 @@ import { VFC, useState } from "react";
 import { useSettings } from "../SettingsContext";
 import { InputMode } from "../Input";
 import { useFontOptions, isRemoteFont, loadRemoteFont } from "../fonts";
+import { t } from "../i18n";
 
 // Input mode options for dropdown
 const inputModeOptions = [
@@ -74,13 +75,30 @@ export const TabControls: VFC<TabControlsProps> = ({ inputDiagnostics }) => {
 
     return (
         <div>
-            <PanelSection title="Control">
+            <PanelSection title={t("Interface")}>
                 <PanelSectionRow>
                     <DropdownItem
                         layout="below"
-                        label="Quick Translation Shortcut"
-                        description="Select which buttons to hold to start translaton"
-                        rgOptions={inputModeOptions}
+                        label={t("Plugin Language")}
+                        description={t("Choose the language used by the plugin interface")}
+                        rgOptions={[
+                            { label: t("System language"), data: "system" },
+                            { label: t("Chinese"), data: "zh-CN" },
+                            { label: t("English"), data: "en" },
+                        ]}
+                        selectedOption={settings.pluginLanguage}
+                        onChange={(option) => updateSetting('pluginLanguage', option.data, t('Plugin Language'))}
+                    />
+                </PanelSectionRow>
+            </PanelSection>
+
+            <PanelSection title={t("Control")}>
+                <PanelSectionRow>
+                    <DropdownItem
+                        layout="below"
+                        label={t("Quick Translation Shortcut")}
+                        description={t("Select which buttons to hold to start translaton")}
+                        rgOptions={inputModeOptions.map((option) => ({ ...option, label: t(option.label) }))}
                         selectedOption={settings.inputMode}
                         onChange={(option) => updateSetting('inputMode', option.data, 'Input method')}
                     />
@@ -92,8 +110,8 @@ export const TabControls: VFC<TabControlsProps> = ({ inputDiagnostics }) => {
                         max={3}
                         min={0}
                         step={0.1}
-                        label="Hold Time to Start"
-                        description="Seconds to hold button(s) to translate"
+                        label={t("Hold Time to Start")}
+                        description={t("Seconds to hold button(s) to translate")}
                         showValue={true}
                         valueSuffix="s"
                         onChange={(value) => {
@@ -109,8 +127,8 @@ export const TabControls: VFC<TabControlsProps> = ({ inputDiagnostics }) => {
                         max={3}
                         min={0}
                         step={0.1}
-                        label="Hold Time to Dismiss"
-                        description="Seconds to hold button(s) to dismiss overlay"
+                        label={t("Hold Time to Dismiss")}
+                        description={t("Seconds to hold button(s) to dismiss overlay")}
                         showValue={true}
                         valueSuffix="s"
                         onChange={(value) => {
@@ -128,8 +146,8 @@ export const TabControls: VFC<TabControlsProps> = ({ inputDiagnostics }) => {
                     <PanelSectionRow>
                         <ToggleField
                             checked={settings.quickToggleEnabled}
-                            label="Quick toggle with Right Button"
-                            description="If double buttons combination is selected, press right button to toggle overlay visibility"
+                            label={t("Quick toggle with Right Button")}
+                            description={t("If double buttons combination is selected, press right button to toggle overlay visibility")}
                             onChange={(value) => {
                                 updateSetting('quickToggleEnabled', value, 'Quick toggle');
                             }}
@@ -138,12 +156,12 @@ export const TabControls: VFC<TabControlsProps> = ({ inputDiagnostics }) => {
                 )}
             </PanelSection>
 
-            <PanelSection title="Display">
+            <PanelSection title={t("Display")}>
                 <PanelSectionRow>
                     <ToggleField
                         checked={settings.passthroughMode}
-                        label="Passthrough Mode"
-                        description="Keep the game live and show only translated text boxes instead of the captured screenshot"
+                        label={t("Passthrough Mode")}
+                        description={t("Keep the game live and show only translated text boxes instead of the captured screenshot")}
                         onChange={(value) => {
                             updateSetting('passthroughMode', value, 'Passthrough mode');
                         }}
@@ -157,8 +175,8 @@ export const TabControls: VFC<TabControlsProps> = ({ inputDiagnostics }) => {
                             min={0}
                             max={100}
                             step={5}
-                            label="Text Box Opacity"
-                            description="Adjust the translated text box background without fading the text"
+                            label={t("Text Box Opacity")}
+                            description={t("Adjust the translated text box background without fading the text")}
                             showValue={true}
                             valueSuffix="%"
                             onChange={(value) => {
@@ -174,8 +192,8 @@ export const TabControls: VFC<TabControlsProps> = ({ inputDiagnostics }) => {
                         max={3}
                         min={1}
                         step={0.1}
-                        label="Font Scaling"
-                        description="Increase if translated text is too small. Can be useful for large external monitors"
+                        label={t("Font Scaling")}
+                        description={t("Increase if translated text is too small. Can be useful for large external monitors")}
                         showValue={true}
                         valueSuffix="x"
                         onChange={(value) => {
@@ -193,12 +211,12 @@ export const TabControls: VFC<TabControlsProps> = ({ inputDiagnostics }) => {
                         step={0.25}
                         notchCount={4}
                         notchTicksVisible={true}
-                        label="Text Blocks Grouping"
+                        label={t("Text Blocks Grouping")}
                         description={
-                            settings.groupingPower <= 0.25 ? "Normal - Keeps text blocks separated" :
-                            settings.groupingPower <= 0.5 ? "Increased - Merges text blocks" :
-                            settings.groupingPower <= 0.75 ? "Large - Merges distant text blocks" :
-                            "Huge - Merges very distant text blocks"
+                            settings.groupingPower <= 0.25 ? t("Normal - Keeps text blocks separated") :
+                            settings.groupingPower <= 0.5 ? t("Increased - Merges text blocks") :
+                            settings.groupingPower <= 0.75 ? t("Large - Merges distant text blocks") :
+                            t("Huge - Merges very distant text blocks")
                         }
                         onChange={(value) => {
                             updateSetting('groupingPower', value, 'Text grouping');
@@ -209,9 +227,9 @@ export const TabControls: VFC<TabControlsProps> = ({ inputDiagnostics }) => {
                 <PanelSectionRow>
                     <DropdownItem
                         layout="below"
-                        label="Translated Text Alignment"
-                        description="Choose alignment for translated text labels"
-                        rgOptions={translatedTextAlignmentOptions}
+                        label={t("Translated Text Alignment")}
+                        description={t("Choose alignment for translated text labels")}
+                        rgOptions={translatedTextAlignmentOptions.map((option) => ({ ...option, label: t(option.label) }))}
                         selectedOption={settings.translatedTextAlignment}
                         onChange={(option) => updateSetting('translatedTextAlignment', option.data, 'Text alignment')}
                     />
@@ -221,7 +239,7 @@ export const TabControls: VFC<TabControlsProps> = ({ inputDiagnostics }) => {
                     <DropdownItem
                         key={fontDropdownKey}
                         layout="below"
-                        label="Translated Text Font"
+                        label={t("Translated Text Font")}
                         description={fontDescription}
                         rgOptions={fontOptions}
                         selectedOption={settings.translatedTextFontFamily}
@@ -253,16 +271,16 @@ export const TabControls: VFC<TabControlsProps> = ({ inputDiagnostics }) => {
                 <PanelSectionRow>
                     <DropdownItem
                         layout="below"
-                        label="Translated Text Style"
-                        description="Font weight and style for translated text"
+                        label={t("Translated Text Style")}
+                        description={t("Font weight and style for translated text")}
                         rgOptions={[
-                            { label: <span>Normal</span>, data: "normal" },
-                            { label: <span style={{ fontWeight: 'bold' }}>Bold</span>, data: "bold" },
-                            { label: <span style={{ fontStyle: 'italic' }}>Italic</span>, data: "italic" },
-                            { label: <span style={{ fontWeight: 'bold', fontStyle: 'italic' }}>Bold Italic</span>, data: "bolditalic" }
+                            { label: <span>{t("Normal")}</span>, data: "normal" },
+                            { label: <span style={{ fontWeight: 'bold' }}>{t("Bold")}</span>, data: "bold" },
+                            { label: <span style={{ fontStyle: 'italic' }}>{t("Italic")}</span>, data: "italic" },
+                            { label: <span style={{ fontWeight: 'bold', fontStyle: 'italic' }}>{t("Bold Italic")}</span>, data: "bolditalic" }
                         ]}
                         selectedOption={settings.translatedTextFontStyle}
-                        renderButtonValue={() => fontStyleLabels[settings.translatedTextFontStyle] || 'Normal'}
+                        renderButtonValue={() => t(fontStyleLabels[settings.translatedTextFontStyle] || 'Normal')}
                         onChange={(option) => updateSetting('translatedTextFontStyle', option.data, 'Text style')}
                     />
                 </PanelSectionRow>
@@ -270,8 +288,8 @@ export const TabControls: VFC<TabControlsProps> = ({ inputDiagnostics }) => {
                 <PanelSectionRow>
                     <ToggleField
                         checked={settings.hideIdenticalTranslations}
-                        label="Hide Identical Translations"
-                        description="Don't display if translation is the same as original word/sentence"
+                        label={t("Hide Identical Translations")}
+                        description={t("Don't display if translation is the same as original word/sentence")}
                         onChange={(value) => {
                             updateSetting('hideIdenticalTranslations', value, 'Hide identical translations');
                         }}
@@ -281,8 +299,8 @@ export const TabControls: VFC<TabControlsProps> = ({ inputDiagnostics }) => {
                 <PanelSectionRow>
                     <ToggleField
                         checked={settings.allowLabelGrowth}
-                        label="Allow Labels to Expand"
-                        description="Let translated labels grow wider if the text doesn't fit the original box"
+                        label={t("Allow Labels to Expand")}
+                        description={t("Let translated labels grow wider if the text doesn't fit the original box")}
                         onChange={(value) => {
                             updateSetting('allowLabelGrowth', value, 'Allow label growth');
                         }}
@@ -290,12 +308,12 @@ export const TabControls: VFC<TabControlsProps> = ({ inputDiagnostics }) => {
                 </PanelSectionRow>
             </PanelSection>
 
-            <PanelSection title="Steam Screenshots">
+            <PanelSection title={t("Steam Screenshots")}>
                 <PanelSectionRow>
                     <ToggleField
                         checked={settings.steamScreenshotTranslationEnabled}
-                        label="Include Translations in Screenshots"
-                        description="Composite the currently visible translated text boxes into STEAM+R1 screenshots"
+                        label={t("Include Translations in Screenshots")}
+                        description={t("Composite the currently visible translated text boxes into STEAM+R1 screenshots")}
                         onChange={(value) => {
                             updateSetting(
                                 'steamScreenshotTranslationEnabled',
@@ -310,8 +328,8 @@ export const TabControls: VFC<TabControlsProps> = ({ inputDiagnostics }) => {
                     <PanelSectionRow>
                         <ToggleField
                             checked={settings.steamScreenshotKeepOriginal}
-                            label="Keep Original Screenshot"
-                            description="Keep Steam's native image and create a numbered translated copy beside it. Steam Media may not index plugin-created copies"
+                            label={t("Keep Original Screenshot")}
+                            description={t("Keep Steam's native image and create a numbered translated copy beside it. Steam Media may not index plugin-created copies")}
                             onChange={(value) => {
                                 updateSetting(
                                     'steamScreenshotKeepOriginal',
@@ -324,14 +342,14 @@ export const TabControls: VFC<TabControlsProps> = ({ inputDiagnostics }) => {
                 )}
             </PanelSection>
 
-            <PanelSection title="Behavior">
+            <PanelSection title={t("Behavior")}>
                 <PanelSectionRow>
                     <ToggleField
                         checked={settings.pauseGameOnOverlay}
-                        label="Pause Game While Translating"
+                        label={t("Pause Game While Translating")}
                         description={settings.passthroughMode
-                            ? "Ignored while Passthrough Mode is enabled so the game remains live"
-                            : <>Pauses the active game and allows you to read the text more thoughtfully. The game is resumed when overlay is dismissed.<br /><br />Doesn't work well with game streaming (moonlight, geforce now, remote play, etc)</>}
+                            ? t("Ignored while Passthrough Mode is enabled so the game remains live")
+                            : <>{t("Pauses the active game and allows you to read the text more thoughtfully. The game is resumed when overlay is dismissed.")}<br /><br />{t("Doesn't work well with game streaming (moonlight, geforce now, remote play, etc)")}</>}
                         onChange={(value) => {
                             updateSetting('pauseGameOnOverlay', value, 'Pause game while translating');
                         }}
@@ -339,11 +357,11 @@ export const TabControls: VFC<TabControlsProps> = ({ inputDiagnostics }) => {
                 </PanelSectionRow>
             </PanelSection>
 
-            <PanelSection title="Miscellaneous">
+            <PanelSection title={t("Miscellaneous")}>
                 <PanelSectionRow>
                     <ToggleField
-                        label="Debug Mode"
-                        description="Enable verbose console logging and diagnostics panel"
+                        label={t("Debug Mode")}
+                        description={t("Enable verbose console logging and diagnostics panel")}
                         checked={settings.debugMode}
                         onChange={(value) => updateSetting('debugMode', value, 'Debug mode')}
                     />
@@ -366,42 +384,42 @@ export const TabControls: VFC<TabControlsProps> = ({ inputDiagnostics }) => {
                             }}>
                                 <div style={{ display: 'grid', gap: '3px' }}>
                                     <div>
-                                        <span style={{ color: '#888' }}>Status:</span>{' '}
+                                        <span style={{ color: '#888' }}>{t("Status:")}</span>{' '}
                                         {inputDiagnostics.enabled ?
-                                            (inputDiagnostics.healthy ? 'Healthy' : 'Unhealthy') :
-                                            'Disabled'
+                                            (inputDiagnostics.healthy ? t('Healthy') : t('Unhealthy')) :
+                                            t('Disabled')
                                         }
                                     </div>
 
                                     <div>
-                                        <span style={{ color: '#888' }}>Input mode:</span>{' '}
-                                        {getInputModeButtons(inputDiagnostics.inputMode)}
+                                        <span style={{ color: '#888' }}>{t("Input mode:")}</span>{' '}
+                                        {t(getInputModeButtons(inputDiagnostics.inputMode))}
                                     </div>
 
                                     <div>
-                                        <span style={{ color: '#888' }}>Input active:</span>{' '}
-                                        {inputDiagnostics.leftTouchpadTouched ? 'Yes' : 'No'}
+                                        <span style={{ color: '#888' }}>{t("Input active:")}</span>{' '}
+                                        {inputDiagnostics.leftTouchpadTouched ? t('Yes') : t('No')}
                                     </div>
 
                                     <div>
-                                        <span style={{ color: '#888' }}>Buttons pressed:</span>{' '}
+                                        <span style={{ color: '#888' }}>{t("Buttons pressed:")}</span>{' '}
                                         {inputDiagnostics.currentButtons && inputDiagnostics.currentButtons.length > 0
                                             ? inputDiagnostics.currentButtons.join(', ')
-                                            : 'None'}
+                                            : t('None')}
                                     </div>
 
                                     <div>
-                                        <span style={{ color: '#888' }}>Plugin State:</span>{' '}
-                                        {!inputDiagnostics.inCooldown && !inputDiagnostics.waitingForRelease && !inputDiagnostics.overlayVisible ? 'Ready' : ''}
-                                        {inputDiagnostics.inCooldown ? 'Cooldown ' : ''}
-                                        {inputDiagnostics.waitingForRelease ? 'WaitRelease ' : ''}
-                                        {inputDiagnostics.overlayVisible ? 'Overlay ' : ''}
+                                        <span style={{ color: '#888' }}>{t("Plugin State:")}</span>{' '}
+                                        {!inputDiagnostics.inCooldown && !inputDiagnostics.waitingForRelease && !inputDiagnostics.overlayVisible ? t('Ready') : ''}
+                                        {inputDiagnostics.inCooldown ? `${t('Cooldown')} ` : ''}
+                                        {inputDiagnostics.waitingForRelease ? `${t('WaitRelease')} ` : ''}
+                                        {inputDiagnostics.overlayVisible ? `${t('Overlay')} ` : ''}
                                     </div>
 
                                     <div>
-                                        <span style={{ color: '#888' }}>Timings:</span>{' '}
-                                        Hold:{inputDiagnostics.translateHoldTime}ms{' '}
-                                        Dismiss:{inputDiagnostics.dismissHoldTime}ms
+                                        <span style={{ color: '#888' }}>{t("Timings:")}</span>{' '}
+                                        {t('Hold:')}{inputDiagnostics.translateHoldTime}ms{' '}
+                                        {t('Dismiss:')}{inputDiagnostics.dismissHoldTime}ms
                                     </div>
                                 </div>
 
@@ -415,7 +433,7 @@ export const TabControls: VFC<TabControlsProps> = ({ inputDiagnostics }) => {
                                         borderRadius: '4px',
                                         fontSize: '11px'
                                     }}>
-                                        Input system is unhealthy - try toggling the plugin off/on
+                                        {t("Input system is unhealthy - try toggling the plugin off/on")}
                                     </div>
                                 )}
                             </div>

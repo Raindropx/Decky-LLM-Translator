@@ -15,6 +15,7 @@ import { VFC, useCallback, useEffect, useState } from 'react';
 import { HiDocumentDuplicate, HiEye, HiPencil, HiPlus, HiTrash } from 'react-icons/hi2';
 import { ApiKeyTransferHint } from './ApiKeyTransferHint';
 import { useSettings } from './SettingsContext';
+import { t } from './i18n';
 
 export interface LLMEndpoint {
     id: string;
@@ -73,13 +74,13 @@ const EndpointEditorModal: VFC<{
 
             const result = await call<[Record<string, unknown>], any>('save_llm_endpoint', payload);
             if (!result?.ok) {
-                setError(result?.message || 'Could not save endpoint');
+                setError(result?.message ? t(result.message) : t('Could not save endpoint'));
                 return;
             }
             onSaved();
             closeModal?.();
         } catch (saveError) {
-            setError(saveError instanceof Error ? saveError.message : 'Could not save endpoint');
+            setError(saveError instanceof Error ? saveError.message : t('Could not save endpoint'));
         } finally {
             setSaving(false);
         }
@@ -88,12 +89,12 @@ const EndpointEditorModal: VFC<{
     return (
         <ModalRoot onCancel={closeModal} onEscKeypress={closeModal}>
             <div style={{ padding: '20px', minWidth: '440px' }}>
-                <h2>{endpoint ? 'Edit LLM Endpoint' : 'Add LLM Endpoint'}</h2>
-                <TextField label="Name" value={name} onChange={(e) => setName(e.target.value)} />
-                <TextField label="Base URL" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} />
-                <TextField label="Model" value={model} onChange={(e) => setModel(e.target.value)} />
+                <h2>{endpoint ? t('Edit LLM Endpoint') : t('Add LLM Endpoint')}</h2>
+                <TextField label={t("Name")} value={name} onChange={(e) => setName(e.target.value)} />
+                <TextField label={t("Base URL")} value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} />
+                <TextField label={t("Model")} value={model} onChange={(e) => setModel(e.target.value)} />
                 <TextField
-                    label={endpoint?.hasApiKey ? 'API Key (leave blank to keep current key)' : 'API Key'}
+                    label={endpoint?.hasApiKey ? t('API Key (leave blank to keep current key)') : t('API Key')}
                     value={apiKey}
                     bIsPassword
                     bShowClearAction
@@ -101,20 +102,20 @@ const EndpointEditorModal: VFC<{
                 />
                 <ApiKeyTransferHint />
                 <ToggleField
-                    label="Send Annotated Screenshot"
-                    description="Draw OCR IDs on a reference image and send it to the model. Otherwise, only plain text is sent to the model."
+                    label={t("Send Annotated Screenshot")}
+                    description={t("Draw OCR IDs on a reference image and send it to the model. Otherwise, only plain text is sent to the model.")}
                     checked={visionEnabled}
                     onChange={setVisionEnabled}
                 />
                 {baseUrl.trim().toLowerCase().startsWith('http://') && (
                     <div style={{ color: '#ffb74d', marginTop: '8px', fontSize: '12px' }}>
-                        HTTP sends the API key, OCR text and optional screenshot without transport encryption.
+                        {t("HTTP sends the API key, OCR text and optional screenshot without transport encryption.")}
                     </div>
                 )}
                 {error && <div style={{ color: '#ff6b6b', marginTop: '8px' }}>{error}</div>}
                 <Focusable style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', marginTop: '18px' }}>
-                    <DialogButton onClick={closeModal}>Cancel</DialogButton>
-                    <DialogButton onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Save'}</DialogButton>
+                    <DialogButton onClick={closeModal}>{t("Cancel")}</DialogButton>
+                    <DialogButton onClick={save} disabled={saving}>{saving ? t('Saving…') : t('Save')}</DialogButton>
                 </Focusable>
             </div>
         </ModalRoot>
@@ -169,14 +170,14 @@ export const LLMEndpointSection: VFC<{
                 selected.id,
             );
             if (!result?.ok || !result.endpoint) {
-                setActionError(result?.message || 'Could not copy endpoint');
+                setActionError(result?.message ? t(result.message) : t('Could not copy endpoint'));
                 return;
             }
             await refresh();
             openEditor(result.endpoint);
         } catch (duplicateError) {
             setActionError(
-                duplicateError instanceof Error ? duplicateError.message : 'Could not copy endpoint',
+                duplicateError instanceof Error ? duplicateError.message : t('Could not copy endpoint'),
             );
         } finally {
             setDuplicating(false);
@@ -184,23 +185,23 @@ export const LLMEndpointSection: VFC<{
     };
 
     return (
-        <PanelSection title="LLM Translation">
+        <PanelSection title={t("LLM Translation")}>
             {legacyMode && (
                 <PanelSectionRow>
                     <div style={{ color: '#9aa0a6', fontSize: '12px', lineHeight: 1.5 }}>
-                        Legacy Gemini Vision currently handles OCR and translation together. Configured LLM endpoints remain available when you switch back to a normal OCR provider.
+                        {t("Legacy Gemini Vision currently handles OCR and translation together. Configured LLM endpoints remain available when you switch back to a normal OCR provider.")}
                     </div>
                 </PanelSectionRow>
             )}
             <PanelSectionRow>
                 <DropdownItem
                     layout="below"
-                    label="Current LLM Endpoint"
-                    description={selected?.visionEnabled ? 'Annotated screenshot enabled' : 'Text-only context'}
+                    label={t("Current LLM Endpoint")}
+                    description={selected?.visionEnabled ? t('Annotated screenshot enabled') : t('Text-only context')}
                     rgOptions={endpoints.length ? endpoints.map((endpoint) => ({
                         label: `${endpoint.visionEnabled ? '◉ ' : ''}${endpoint.name}`,
                         data: endpoint.id,
-                    })) : [{ label: 'No endpoints configured', data: '' }]}
+                    })) : [{ label: t('No endpoints configured'), data: '' }]}
                     selectedOption={selectedId}
                     disabled={!endpoints.length || legacyMode}
                     onChange={(option: any) => selectEndpoint(option.data)}
@@ -213,7 +214,7 @@ export const LLMEndpointSection: VFC<{
                         <div style={{ wordBreak: 'break-all' }}>{selected.baseUrl}</div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '5px', marginTop: '4px' }}>
                             {selected.visionEnabled && <HiEye />}
-                            <span>{selected.hasApiKey ? 'API key configured' : 'No API key (allowed for local endpoints)'}</span>
+                            <span>{selected.hasApiKey ? t('API key configured') : t('No API key (allowed for local endpoints)')}</span>
                         </div>
                     </div>
                 </PanelSectionRow>
@@ -231,7 +232,7 @@ export const LLMEndpointSection: VFC<{
                     >
                         <DialogButton
                             onClick={() => openEditor()}
-                            aria-label="Add endpoint"
+                            aria-label={t("Add endpoint")}
                             style={{ width: '100%', minWidth: 0, height: '48px', padding: 0 }}
                         >
                             <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -241,7 +242,7 @@ export const LLMEndpointSection: VFC<{
                         <DialogButton
                             onClick={duplicateSelected}
                             disabled={!selected || duplicating}
-                            aria-label="Copy selected endpoint"
+                            aria-label={t("Copy selected endpoint")}
                             style={{ width: '100%', minWidth: 0, height: '48px', padding: 0 }}
                         >
                             <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -277,7 +278,7 @@ export const LLMEndpointSection: VFC<{
             {!endpoints.length && (
                 <PanelSectionRow>
                     <ButtonItem layout="below" onClick={() => openEditor()}>
-                        Configure your first OpenAI-compatible endpoint
+                        {t("Configure your first OpenAI-compatible endpoint")}
                     </ButtonItem>
                 </PanelSectionRow>
             )}
