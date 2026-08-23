@@ -1,6 +1,7 @@
 # Local OCR via Chrome Screen AI. The .so and TFLite models are
 # fetched on demand from Google's CIPD server, not bundled in the plugin.
 
+import asyncio
 import json
 import logging
 import os
@@ -12,6 +13,7 @@ from typing import List, Optional
 
 from .base import OCRProvider, ProviderType, TextRegion
 from . import python_runtime
+from .worker_io import WorkerResponseTimeout, readline_with_timeout
 
 logger = logging.getLogger(__name__)
 
@@ -231,7 +233,10 @@ class ChromeScreenAIProvider(OCRProvider):
             try:
                 self._worker_proc.stdin.write((json.dumps(init_msg) + "\n").encode())
                 self._worker_proc.stdin.flush()
-                ready_line = self._worker_proc.stdout.readline()
+                ready_line = readline_with_timeout(
+                    self._worker_proc.stdout,
+                    OCR_TIMEOUT_SECONDS,
+                )
                 if not ready_line:
                     logger.error("Chrome Screen AI worker died before ready response")
                     self._kill_worker_unlocked()
@@ -241,6 +246,10 @@ class ChromeScreenAIProvider(OCRProvider):
                     logger.error(f"Chrome Screen AI worker init error: {ready['error']}")
                     self._kill_worker_unlocked()
                     return False
+            except WorkerResponseTimeout as e:
+                logger.error(f"Chrome Screen AI worker init timed out: {e}")
+                self._kill_worker_unlocked()
+                return False
             except Exception as e:
                 logger.error(f"Chrome Screen AI worker init failed: {e}")
                 self._kill_worker_unlocked()
@@ -298,12 +307,15 @@ class ChromeScreenAIProvider(OCRProvider):
             return []
 
         if self._persistent_mode:
-            result = self._recognize_via_worker(image_data)
+            result = await asyncio.to_thread(self._recognize_via_worker, image_data)
             if result is not None:
                 return result
             logger.warning("Chrome Screen AI worker unavailable, falling back to oneshot")
 
-        return self._recognize_oneshot(image_data)
+        result = await asyncio.to_thread(self._recognize_oneshot, image_data)
+        if self._persistent_mode and not self._is_worker_alive():
+            threading.Thread(target=self._warmup_worker, daemon=True).start()
+        return result
 
     def _recognize_via_worker(self, image_data: bytes) -> Optional[List[TextRegion]]:
         if not self._is_worker_alive():
@@ -326,7 +338,14 @@ class ChromeScreenAIProvider(OCRProvider):
                 try:
                     self._worker_proc.stdin.write((json.dumps(request) + "\n").encode())
                     self._worker_proc.stdin.flush()
-                    response_line = self._worker_proc.stdout.readline()
+                    response_line = readline_with_timeout(
+                        self._worker_proc.stdout,
+                        OCR_TIMEOUT_SECONDS,
+                    )
+                except WorkerResponseTimeout as e:
+                    logger.error(f"Chrome Screen AI worker request timed out: {e}")
+                    self._kill_worker_unlocked()
+                    return None
                 except Exception as e:
                     logger.error(f"Chrome Screen AI worker I/O error: {e}")
                     self._kill_worker_unlocked()

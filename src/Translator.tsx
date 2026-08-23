@@ -82,11 +82,7 @@ export class GameTranslatorLogic {
                 if (this.isProcessing) return;
                 if (!this.canStartTranslation()) return;
 
-                // Pause first so the game freezes before the screenshot
-                if (this.shouldPauseGameForOverlay()) {
-                    this.pauseCurrentGame().catch(err => logger.error('Translator', 'Pause failed', err));
-                }
-                this.takeScreenshotAndTranslate().catch(err => logger.error('Translator', 'Screenshot failed', err));
+                this.takeScreenshotAndTranslate(true).catch(err => logger.error('Translator', 'Screenshot failed', err));
             }
         });
 
@@ -242,13 +238,13 @@ export class GameTranslatorLogic {
     }
 
     // Method to pause the current game
-    async pauseCurrentGame(): Promise<void> {
+    async pauseCurrentGame(): Promise<boolean> {
         try {
             // Get the current running app ID
             const mainApp = Router.MainRunningApp;
             if (!mainApp || !mainApp.appid) {
                 logger.debug('Translator', 'No game running to pause');
-                return;
+                return false;
             }
 
             // Use the pid_from_appid function to get the process ID
@@ -261,6 +257,7 @@ export class GameTranslatorLogic {
                 const pauseResult = await call<[number], boolean>('pause', pid);
                 if (pauseResult) {
                     logger.info('Translator', 'Game paused successfully');
+                    return true;
                 } else {
                     logger.error('Translator', 'Failed to pause game');
                 }
@@ -270,6 +267,7 @@ export class GameTranslatorLogic {
         } catch (error) {
             logger.error('Translator', 'Error pausing game', error);
         }
+        return false;
     }
 
     // Method to resume the current game
@@ -351,7 +349,7 @@ export class GameTranslatorLogic {
         }
     }
 
-    takeScreenshotAndTranslate = async (): Promise<void> => {
+    takeScreenshotAndTranslate = async (pauseBeforeCapture: boolean = false): Promise<void> => {
         // If already processing or disabled, return
         if (this.isProcessing || !this.enabled) {
             logger.debug('Translator', 'Already processing a screenshot or plugin disabled, skipping');
@@ -362,9 +360,19 @@ export class GameTranslatorLogic {
 
         const runId = ++this.currentRunId;
         const isCancelled = (): boolean => runId !== this.currentRunId;
+        let pausedForRun = false;
+        let overlayShownForRun = false;
 
         try {
             this.isProcessing = true;
+
+            if (pauseBeforeCapture && this.shouldPauseGameForOverlay()) {
+                pausedForRun = await this.pauseCurrentGame();
+                if (isCancelled()) {
+                    logger.debug('Translator', 'Translation cancelled while pausing the game');
+                    return;
+                }
+            }
 
             // Take screenshot FIRST while screen is clean (no overlay visible)
             const appName = Router.MainRunningApp?.display_name || "";
@@ -385,6 +393,7 @@ export class GameTranslatorLogic {
             logger.debug('Translator', `Screenshot captured, path: ${result.path}, base64 length: ${result.base64.length}`);
 
             this.imageState.startLoading("Processing");
+            overlayShownForRun = true;
             this.imageState.showImage(result.base64);
             const recognizingStep = this.ocrProvider === 'legacy_gemini_vision'
                 ? "Recognizing and Translating"
@@ -490,6 +499,12 @@ export class GameTranslatorLogic {
             }
         }
         finally {
+            if (
+                pausedForRun
+                && (!overlayShownForRun || !this.shouldPauseGameForOverlay())
+            ) {
+                await this.resumeCurrentGame();
+            }
             if (!isCancelled()) {
                 this.isProcessing = false;
             }

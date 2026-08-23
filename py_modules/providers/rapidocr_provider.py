@@ -2,6 +2,7 @@
 # Local RapidOCR provider - runs entirely on device without internet
 # Uses ONNX Runtime for fast inference with PaddleOCR models
 
+import asyncio
 import json
 import logging
 import os
@@ -14,6 +15,7 @@ from typing import List, Optional
 
 from .base import OCRProvider, ProviderType, TextRegion
 from . import python_runtime
+from .worker_io import WorkerResponseTimeout, readline_with_timeout
 
 logger = logging.getLogger(__name__)
 
@@ -414,7 +416,10 @@ class RapidOCRProvider(OCRProvider):
             try:
                 self._worker_proc.stdin.write((json.dumps(init_msg) + "\n").encode())
                 self._worker_proc.stdin.flush()
-                ready_line = self._worker_proc.stdout.readline()
+                ready_line = readline_with_timeout(
+                    self._worker_proc.stdout,
+                    OCR_TIMEOUT_SECONDS,
+                )
                 if not ready_line:
                     logger.error("RapidOCR worker died before ready response")
                     self._kill_worker_unlocked()
@@ -424,6 +429,10 @@ class RapidOCRProvider(OCRProvider):
                     logger.error(f"RapidOCR worker init error: {ready['error']}")
                     self._kill_worker_unlocked()
                     return False
+            except WorkerResponseTimeout as e:
+                logger.error(f"RapidOCR worker init timed out: {e}")
+                self._kill_worker_unlocked()
+                return False
             except Exception as e:
                 logger.error(f"RapidOCR worker init failed: {e}")
                 self._kill_worker_unlocked()
@@ -490,12 +499,19 @@ class RapidOCRProvider(OCRProvider):
             return []
 
         if self._persistent_mode:
-            result = self._recognize_via_worker(image_data, language)
+            result = await asyncio.to_thread(
+                self._recognize_via_worker,
+                image_data,
+                language,
+            )
             if result is not None:
                 return result
             logger.warning("RapidOCR worker unavailable, falling back to oneshot")
 
-        return self._recognize_oneshot(image_data, language)
+        result = await asyncio.to_thread(self._recognize_oneshot, image_data, language)
+        if self._persistent_mode and not self._is_worker_alive():
+            threading.Thread(target=self._warmup_worker, daemon=True).start()
+        return result
 
     def _recognize_via_worker(self, image_data: bytes, language: str) -> Optional[List[TextRegion]]:
         if not self._is_worker_alive():
@@ -525,7 +541,14 @@ class RapidOCRProvider(OCRProvider):
                 try:
                     self._worker_proc.stdin.write((json.dumps(request) + "\n").encode())
                     self._worker_proc.stdin.flush()
-                    response_line = self._worker_proc.stdout.readline()
+                    response_line = readline_with_timeout(
+                        self._worker_proc.stdout,
+                        OCR_TIMEOUT_SECONDS,
+                    )
+                except WorkerResponseTimeout as e:
+                    logger.error(f"RapidOCR worker request timed out: {e}")
+                    self._kill_worker_unlocked()
+                    return None
                 except Exception as e:
                     logger.error(f"RapidOCR worker I/O error: {e}")
                     self._kill_worker_unlocked()

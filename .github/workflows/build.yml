@@ -19,6 +19,7 @@ jobs:
       contents: write
     outputs:
       version: ${{ steps.version.outputs.version }}
+      package_version: ${{ steps.version.outputs.package_version }}
       is_release: ${{ steps.version.outputs.is_release }}
       sha256: ${{ steps.dependencies_hash.outputs.sha256 }}
     steps:
@@ -113,32 +114,50 @@ jobs:
 
       - name: Get version
         id: version
+        env:
+          RELEASE_VERSION_INPUT: ${{ inputs.release_version }}
         run: |
-          if [[ -n "${{ inputs.release_version }}" ]]; then
-            VERSION="${{ inputs.release_version }}"
+          if [[ -n "$RELEASE_VERSION_INPUT" ]]; then
+            RAW_VERSION="$RELEASE_VERSION_INPUT"
+            if [[ ! "$RAW_VERSION" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "release_version must use vX.Y.Z or X.Y.Z" >&2
+              exit 1
+            fi
+            PACKAGE_VERSION="${RAW_VERSION#v}"
+            VERSION="v${PACKAGE_VERSION}"
             IS_RELEASE="true"
           else
             VERSION="dev-$(echo ${{ github.sha }} | cut -c1-7)"
+            PACKAGE_VERSION=""
             IS_RELEASE="false"
           fi
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "is_release=$IS_RELEASE" >> $GITHUB_OUTPUT
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "package_version=$PACKAGE_VERSION" >> "$GITHUB_OUTPUT"
+          echo "is_release=$IS_RELEASE" >> "$GITHUB_OUTPUT"
           echo "Version: $VERSION (is_release: $IS_RELEASE)"
 
       - name: Update package.json with release values
         if: steps.version.outputs.is_release == 'true'
+        env:
+          RELEASE_TAG: ${{ steps.version.outputs.version }}
+          PACKAGE_VERSION: ${{ steps.version.outputs.package_version }}
+          DEPENDENCIES_SHA256: ${{ steps.dependencies_hash.outputs.sha256 }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
         run: |
-          sed -i -E "s#\"version\": \"[0-9]+\.[0-9]+\.[0-9]+\"#\"version\": \"${{ steps.version.outputs.version }}\"#g" package.json
-          sed -i -E "s#/download/(__VERSION__|v?[0-9]+\.[0-9]+\.[0-9]+|dev-[a-f0-9]+)/#/download/${{ steps.version.outputs.version }}/#g" package.json
-          sed -i -E "s#\"sha256hash\": \"(__SHA256__|[a-f0-9]{64})\"#\"sha256hash\": \"${{ steps.dependencies_hash.outputs.sha256 }}\"#g" package.json
+          python .github/scripts/update_package_release.py \
+            --package package.json \
+            --repository "$RELEASE_REPOSITORY" \
+            --release-tag "$RELEASE_TAG" \
+            --package-version "$PACKAGE_VERSION" \
+            --sha256 "$DEPENDENCIES_SHA256"
           grep "version" package.json | head -1
           grep -A5 "remote_binary" package.json
 
       - name: Commit and tag release
         if: steps.version.outputs.is_release == 'true'
         run: |
-          git config user.name "Alexander Timoshuk"
-          git config user.email "46809884+cat-in-a-box@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           if git diff --quiet package.json; then
             echo "No changes to package.json"
@@ -157,9 +176,16 @@ jobs:
 
       - name: Update package.json for dev build
         if: steps.version.outputs.is_release != 'true'
+        env:
+          RELEASE_TAG: ${{ steps.version.outputs.version }}
+          DEPENDENCIES_SHA256: ${{ steps.dependencies_hash.outputs.sha256 }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
         run: |
-          sed -i -E "s#/download/(__VERSION__|v?[0-9]+\.[0-9]+\.[0-9]+|dev-[a-f0-9]+)/#/download/${{ steps.version.outputs.version }}/#g" package.json
-          sed -i -E "s#\"sha256hash\": \"(__SHA256__|[a-f0-9]{64})\"#\"sha256hash\": \"${{ steps.dependencies_hash.outputs.sha256 }}\"#g" package.json
+          python .github/scripts/update_package_release.py \
+            --package package.json \
+            --repository "$RELEASE_REPOSITORY" \
+            --release-tag "$RELEASE_TAG" \
+            --sha256 "$DEPENDENCIES_SHA256"
           grep -A5 "remote_binary" package.json
 
       - name: Build plugin with Decky CLI
@@ -170,17 +196,18 @@ jobs:
         run: |
           cd out
           mkdir _staging
-          unzip -q "Decky Translator.zip" -d _staging
-          mv "_staging/Decky Translator" "_staging/decky-translator"
-          rm "Decky Translator.zip"
-          (cd _staging && zip -qr "../Decky Translator.zip" decky-translator)
+          unzip -q "Decky LLM Translator.zip" -d _staging
+          test -d "_staging/Decky LLM Translator"
+          mv "_staging/Decky LLM Translator" "_staging/decky-llm-translator"
+          rm "Decky LLM Translator.zip"
+          (cd _staging && zip -qr "../Decky LLM Translator.zip" decky-llm-translator)
           rm -rf _staging
-          unzip -l "Decky Translator.zip" | head -5
+          unzip -l "Decky LLM Translator.zip" | head -5
 
       - name: Upload plugin artifact
         uses: actions/upload-artifact@v4
         with:
-          name: decky-translator-plugin
+          name: decky-llm-translator-plugin
           path: out/*.zip
 
       - name: Upload dependencies artifact
@@ -199,7 +226,7 @@ jobs:
       - name: Download plugin artifact
         uses: actions/download-artifact@v4
         with:
-          name: decky-translator-plugin
+          name: decky-llm-translator-plugin
           path: ./
 
       - name: Download dependencies artifact
@@ -214,7 +241,7 @@ jobs:
           tag_name: ${{ needs.build.outputs.version }}
           token: ${{ secrets.RELEASE_TOKEN }}
           files: |
-            Decky Translator.zip
+            Decky LLM Translator.zip
             plugin-dependencies.tar.gz
           draft: true
           generate_release_notes: true

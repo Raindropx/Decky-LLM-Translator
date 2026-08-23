@@ -94,6 +94,10 @@ import requests
 from providers import ProviderManager, TextRegion, NetworkError, ApiKeyError, RateLimitError
 from providers.custom_languages import normalize_custom_languages
 from providers.llm_endpoint_utils import next_endpoint_copy_name
+from providers.screenshot_paths import (
+    PrivateScreenshotPathError,
+    resolve_private_screenshot_path,
+)
 from providers.llm_translation import (
     LLMConfigurationError,
     LLMResponseError,
@@ -1786,7 +1790,8 @@ class Plugin:
 
             # Build filename
             timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S_%f")
-            os.makedirs(self._screenshotPath, exist_ok=True)
+            os.makedirs(self._screenshotPath, mode=0o700, exist_ok=True)
+            os.chmod(self._screenshotPath, 0o700)
             screenshot_path = f"{self._screenshotPath}/{app_name}_{timestamp}.png"
             logger.debug(f"Screenshot path: {screenshot_path}")
 
@@ -2555,12 +2560,18 @@ class Plugin:
             return []
 
     async def recognize_text_file(self, image_path: str):
+        private_image_path = None
         try:
-            if not os.path.exists(image_path):
-                logger.error(f"Image file does not exist: {image_path}")
+            try:
+                private_image_path = resolve_private_screenshot_path(
+                    image_path,
+                    self._screenshotPath,
+                )
+            except PrivateScreenshotPathError as path_error:
+                logger.warning(f"Rejected OCR screenshot path: {path_error}")
                 return []
 
-            base64_data = get_base64_image(image_path)
+            base64_data = get_base64_image(private_image_path)
             if not base64_data:
                 logger.error("Failed to encode image for OCR")
                 return []
@@ -2571,10 +2582,10 @@ class Plugin:
             logger.error(traceback.format_exc())
             return []
         finally:
-            if image_path and os.path.exists(image_path):
+            if private_image_path and private_image_path.exists():
                 try:
-                    os.remove(image_path)
-                    logger.debug(f"Deleted temporary screenshot: {image_path}")
+                    private_image_path.unlink()
+                    logger.debug(f"Deleted temporary screenshot: {private_image_path}")
                 except Exception as cleanup_error:
                     logger.warning(f"Failed to delete temporary screenshot: {cleanup_error}")
 
