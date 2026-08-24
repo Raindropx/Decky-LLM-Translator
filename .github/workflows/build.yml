@@ -265,7 +265,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.build.outputs.version }}
-          token: ${{ secrets.RELEASE_TOKEN }}
+          token: ${{ github.token }}
           files: |
             Decky LLM Translator.zip
             plugin-dependencies.tar.gz
