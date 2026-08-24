@@ -1,6 +1,6 @@
 {
   "name": "decky-llm-translator",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
   "description": "Translate on-screen game text with configurable LLM endpoints while preserving OCR-based positioning.",
   "scripts": {
@@ -46,8 +46,8 @@
   "remote_binary": [
     {
       "name": "plugin-dependencies.tar.gz",
-      "url": "https://github.com/cat-in-a-box/Decky-Translator/releases/download/0.9.1/plugin-dependencies.tar.gz",
-      "sha256hash": "9348f327816abf8de7abd7a4f44a1f625b6fc5c762be2c0f4a479dded4979ba6"
+      "url": "https://github.com/Raindropx/Decky-LLM-Translator/releases/download/v0.3.0/plugin-dependencies.tar.gz",
+      "sha256hash": "0f60db1cb52ffa586b2abe59c9419a64ae9ee7ea7ce8c1b7090a9f704ed98db1"
     }
   ]
 }
