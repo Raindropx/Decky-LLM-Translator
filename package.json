@@ -47,7 +47,7 @@
     {
       "name": "plugin-dependencies.tar.gz",
       "url": "https://github.com/Raindropx/Decky-LLM-Translator/releases/download/v0.3.0/plugin-dependencies.tar.gz",
-      "sha256hash": "25b258a074d478f4432d76a5184375c97062ac8500f37164ab80de9ced641c62"
+      "sha256hash": "bc8c2a9d81e200c7056d131c581279a78b380b6876f5afdf3eee85a19efa27e5"
     }
   ]
 }
