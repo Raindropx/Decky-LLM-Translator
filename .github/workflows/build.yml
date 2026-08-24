@@ -48,12 +48,6 @@ jobs:
       - name: Build frontend
         run: pnpm run build
 
-      - name: Download Decky CLI
-        run: |
-          mkdir -p cli
-          curl -L -o cli/decky "https://github.com/SteamDeckHomebrew/cli/releases/download/0.0.8/decky-linux-x86_64"
-          chmod +x cli/decky
-
       - name: Setup Python 3.13
         uses: actions/setup-python@v5
         with:
@@ -198,21 +192,43 @@ jobs:
             --sha256 "$DEPENDENCIES_SHA256"
           grep -A5 "remote_binary" package.json
 
-      - name: Build plugin with Decky CLI
+      - name: Package plugin
         run: |
-          cli/decky plugin build $(pwd) -o ./out
+          rm -rf out
+          STAGE="out/_staging/decky-llm-translator"
+          mkdir -p "$STAGE/dist" "$STAGE/py_modules"
+          cp main.py plugin.json package.json README.md LICENSE "$STAGE/"
+          cp -R dist/. "$STAGE/dist/"
+          cp -R py_modules/providers "$STAGE/py_modules/"
+          find "$STAGE" -type d -name __pycache__ -prune -exec rm -rf {} +
+          find "$STAGE" -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
+          (cd out/_staging && zip -qr "../Decky LLM Translator.zip" decky-llm-translator)
+          python - <<'PY'
+          from pathlib import PurePosixPath
+          from zipfile import ZipFile
 
-      - name: Repack zip with kebab-case inner folder
-        run: |
-          cd out
-          mkdir _staging
-          unzip -q "Decky LLM Translator.zip" -d _staging
-          test -d "_staging/Decky LLM Translator"
-          mv "_staging/Decky LLM Translator" "_staging/decky-llm-translator"
-          rm "Decky LLM Translator.zip"
-          (cd _staging && zip -qr "../Decky LLM Translator.zip" decky-llm-translator)
-          rm -rf _staging
-          unzip -l "Decky LLM Translator.zip" | head -5
+          archive = "out/Decky LLM Translator.zip"
+          with ZipFile(archive) as bundle:
+              files = [name.replace("\\", "/") for name in bundle.namelist() if not name.endswith("/")]
+
+          roots = sorted({PurePosixPath(name).parts[0] for name in files})
+          if roots != ["decky-llm-translator"]:
+              raise SystemExit(f"unexpected ZIP roots: {roots}")
+
+          required = {
+              "decky-llm-translator/plugin.json",
+              "decky-llm-translator/package.json",
+              "decky-llm-translator/main.py",
+              "decky-llm-translator/dist/index.js",
+          }
+          missing = sorted(required.difference(files))
+          if missing:
+              raise SystemExit(f"missing required ZIP files: {missing}")
+          if any("__pycache__" in PurePosixPath(name).parts or name.endswith((".pyc", ".pyo")) for name in files):
+              raise SystemExit("ZIP contains transient Python bytecode")
+
+          print(f"Validated {archive}: {len(files)} files, one top-level plugin directory")
+          PY
 
       - name: Upload plugin artifact
         uses: actions/upload-artifact@v4
