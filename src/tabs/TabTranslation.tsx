@@ -376,7 +376,7 @@ interface TabTranslationProps {
 }
 
 export const TabTranslation: VFC<TabTranslationProps> = ({ logic, scrollTarget, onScrolled }) => {
-    const { settings, updateSetting } = useSettings();
+    const { settings, updateSetting, updateLanguageSettings } = useSettings();
     const chromeActionRef = useRef<HTMLDivElement>(null);
     const rapidActionRef = useRef<HTMLDivElement>(null);
     const legacyMode = settings.ocrProvider === 'legacy_gemini_vision';
@@ -439,14 +439,7 @@ export const TabTranslation: VFC<TabTranslationProps> = ({ logic, scrollTarget, 
         <CustomLanguagesModal
             languages={settings.customLanguages}
             selectedDefinition={settings.targetLanguage}
-            onSave={async (languages, nextTargetLanguage) => {
-                const languagesSaved = await updateSetting('customLanguages', languages, 'Custom languages');
-                if (!languagesSaved) return false;
-                if (nextTargetLanguage !== settings.targetLanguage) {
-                    return updateSetting('targetLanguage', nextTargetLanguage, 'Output language');
-                }
-                return true;
-            }}
+            onSave={updateLanguageSettings}
         />
     );
 

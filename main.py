@@ -92,12 +92,13 @@ import requests
 
 # Import provider system
 from providers import ProviderManager, TextRegion, NetworkError, ApiKeyError, RateLimitError
-from providers.custom_languages import normalize_custom_languages
+from providers.custom_languages import normalize_custom_languages, normalize_language_settings
 from providers.llm_endpoint_utils import next_endpoint_copy_name
 from providers.screenshot_paths import (
     PrivateScreenshotPathError,
     resolve_private_screenshot_path,
 )
+from providers.settings_io import write_settings_updates
 from providers.llm_translation import (
     LLMConfigurationError,
     LLMResponseError,
@@ -1079,40 +1080,40 @@ class SettingsManager:
     def __init__(self, name, settings_directory):
         self.settings_path = os.path.join(settings_directory, f"{name}.json")
         self.settings = {}
+        self._lock = threading.RLock()
         logger.debug(f"SettingsManager initialized with path: {self.settings_path}")
 
     def read(self):
-        try:
-            if os.path.exists(self.settings_path):
-                with open(self.settings_path, 'r') as f:
-                    self.settings = json.load(f)
-                os.chmod(self.settings_path, 0o600)
-                logger.debug(f"Settings loaded from {self.settings_path}")
-            else:
-                logger.warning(f"Settings file does not exist: {self.settings_path}")
-        except Exception as e:
-            logger.error(f"Failed to read settings: {str(e)}")
-            logger.error(traceback.format_exc())
+        with self._lock:
+            try:
+                if os.path.exists(self.settings_path):
+                    with open(self.settings_path, 'r') as f:
+                        self.settings = json.load(f)
+                    os.chmod(self.settings_path, 0o600)
+                    logger.debug(f"Settings loaded from {self.settings_path}")
+                else:
+                    logger.warning(f"Settings file does not exist: {self.settings_path}")
+            except Exception as e:
+                logger.error(f"Failed to read settings: {str(e)}")
+                logger.error(traceback.format_exc())
 
     def set_setting(self, key, value):
-        try:
-            # re-read so manual edits to the file are not overwritten by stale memory
-            self.read()
-            self.settings[key] = value
-            os.makedirs(os.path.dirname(self.settings_path), exist_ok=True)
-            temp_path = f"{self.settings_path}.tmp"
-            with open(temp_path, 'w') as f:
-                json.dump(self.settings, f, indent=4)
-                f.flush()
-                os.fsync(f.fileno())
-            os.chmod(temp_path, 0o600)
-            os.replace(temp_path, self.settings_path)
-            logger.debug(f"Saved setting {key}={_mask_for_log(key, value)}")
-            return True
-        except Exception as e:
-            logger.error(f"Failed to save setting {key}: {str(e)}")
-            logger.error(traceback.format_exc())
-            return False
+        return self.set_settings({key: value})
+
+    def set_settings(self, updates):
+        with self._lock:
+            try:
+                self.settings = write_settings_updates(self.settings_path, updates)
+                masked = {
+                    key: _mask_for_log(key, value)
+                    for key, value in updates.items()
+                }
+                logger.debug(f"Saved settings: {masked}")
+                return True
+            except Exception as e:
+                logger.error(f"Failed to save settings: {str(e)}")
+                logger.error(traceback.format_exc())
+                return False
 
     def get_setting(self, key, default=None):
         value = self.settings.get(key, default)
@@ -1346,6 +1347,45 @@ class Plugin:
         try:
             if key == "custom_languages":
                 value = normalize_custom_languages(value)
+            elif key == "plugin_language" and value not in {
+                "system",
+                "en",
+                "zh-CN",
+                "ja",
+                "ko",
+                "ru",
+                "es",
+                "vi",
+                "fil",
+                "ms",
+                "ko-KP",
+                "fr",
+                "de",
+                "pl",
+                "id",
+                "nan",
+                "it",
+                "th",
+                "fi",
+                "tok",
+                "eo",
+            }:
+                raise ValueError("Unsupported plugin language")
+            elif key in {
+                "passthrough_mode",
+                "steam_screenshot_translation_enabled",
+                "steam_screenshot_keep_original",
+            }:
+                value = bool(value)
+            elif key == "text_box_opacity":
+                value = max(0, min(100, float(value)))
+
+            # Persist first so a failed disk write cannot leave the backend
+            # runtime ahead of the durable settings seen after restart.
+            if not self._settings.set_setting(key, value):
+                return False
+
+            if key == "custom_languages":
                 self._custom_languages = value
             elif key == "target_language":
                 self._target_language = value
@@ -1441,14 +1481,12 @@ class Plugin:
             elif key == "quick_toggle_enabled":
                 self._quick_toggle_enabled = value
             elif key == "passthrough_mode":
-                value = bool(value)
+                pass  # frontend-only, normalized and persisted above
             elif key == "text_box_opacity":
-                value = max(0, min(100, float(value)))
+                pass  # frontend-only, normalized and persisted above
             elif key == "steam_screenshot_translation_enabled":
-                value = bool(value)
                 self._steam_screenshot_translation_enabled = value
             elif key == "steam_screenshot_keep_original":
-                value = bool(value)
                 self._steam_screenshot_keep_original = value
             elif key == "font_scale":
                 pass  # frontend-only, just persist to settings file
@@ -1467,8 +1505,7 @@ class Plugin:
             elif key == "custom_recognition_settings":
                 pass  # frontend-only, just persist to settings file
             elif key == "plugin_language":
-                if value not in {"system", "en", "zh-CN"}:
-                    raise ValueError("Unsupported plugin language")
+                pass  # validated and persisted above
             elif key == "debug_mode":
                 logger.setLevel(logging.DEBUG if value else logging.INFO)
             elif key == "use_free_providers":
@@ -1507,7 +1544,7 @@ class Plugin:
             else:
                 logger.warning(f"Unknown setting key: {key}")
 
-            return self._settings.set_setting(key, value)
+            return True
         except Exception as e:
             logger.error(f"Error setting {key}: {str(e)}")
             logger.error(traceback.format_exc())
@@ -2720,6 +2757,36 @@ class Plugin:
 
     async def set_target_language(self, language):
         return await self.set_setting("target_language", language)
+
+    async def set_language_settings(self, custom_languages, target_language):
+        try:
+            normalized_languages, normalized_target = normalize_language_settings(
+                custom_languages,
+                target_language,
+                self._custom_languages,
+            )
+
+            saved = self._settings.set_settings({
+                "custom_languages": normalized_languages,
+                "target_language": normalized_target,
+            })
+            if not saved:
+                return {"success": False, "error": "Failed to save language settings"}
+
+            self._custom_languages = normalized_languages
+            self._target_language = normalized_target
+            return {
+                "success": True,
+                "custom_languages": normalized_languages,
+                "target_language": normalized_target,
+            }
+        except ValueError as error:
+            logger.warning(f"Invalid language settings: {error}")
+            return {"success": False, "error": str(error)}
+        except Exception as error:
+            logger.error(f"Failed to save language settings: {error}")
+            logger.error(traceback.format_exc())
+            return {"success": False, "error": "Failed to save language settings"}
 
     async def get_input_mode(self):
         return self._input_mode

@@ -6,7 +6,7 @@
   "scripts": {
     "build": "shx rm -rf dist && rollup -c",
     "watch": "rollup -c -w",
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "node --test tests/i18n.test.mjs tests/translation-cache.test.mjs",
     "build:deck": "wsl -e sh -c \"rm -rf out node_modules && ./cli/decky plugin build . -o ./out\""
   },
   "repository": {

@@ -247,7 +247,6 @@ const GameTranslator: VFC<{ logic: GameTranslatorLogic }> = ({ logic }) => {
 
 // Activation Indicator component
 const HoldActivationIndicator: VFC<{ logic: GameTranslatorLogic }> = ({logic}) => {
-    const {settings} = useSettings();
     const [progressInfo, setProgressInfo] = useState<ProgressInfo>({
         active: false,
         progress: 0,
@@ -299,14 +298,18 @@ const HoldActivationIndicator: VFC<{ logic: GameTranslatorLogic }> = ({logic}) =
     const getActivationText = () => {
         if (!progressInfo.active) return "";
 
-        const timeRequired = (progressInfo.forDismiss ? settings.holdTimeDismiss : settings.holdTimeTranslate) / 1000;
+        const timeRequired = (
+            progressInfo.forDismiss
+                ? logic.getHoldTimeDismiss()
+                : logic.getHoldTimeTranslate()
+        ) / 1000;
         return progressInfo.forDismiss
             ? t('Hold to Dismiss ({time}s)', { time: timeRequired })
             : t('Hold to Translate ({time}s)', { time: timeRequired });
     };
 
     // Only show the indicator if the plugin is enabled
-    if (!settings.enabled) {
+    if (!logic.isEnabled()) {
         return null;
     }
 
@@ -329,15 +332,6 @@ const TranslatorApp: VFC<{ logic: GameTranslatorLogic }> = ({ logic }) => {
     );
 };
 
-// Indicator wrapped with Settings provider
-const ActivationIndicatorWithSettings: VFC<{ logic: GameTranslatorLogic }> = ({ logic }) => {
-    return (
-        <SettingsProvider logic={logic}>
-            <HoldActivationIndicator logic={logic}/>
-        </SettingsProvider>
-    );
-};
-
 // Export the plugin
 export default definePlugin(() => {
     // Create image state to manage the overlay
@@ -353,7 +347,7 @@ export default definePlugin(() => {
 
     // Add activation indicator as a global component
     routerHook.addGlobalComponent("DeckyLLMTranslatorHoldActivationIndicator", () => (
-        <ActivationIndicatorWithSettings logic={logic}/>
+        <HoldActivationIndicator logic={logic}/>
     ));
 
     return {

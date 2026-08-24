@@ -126,6 +126,8 @@ export class Input {
 
     // Track previous buttons state
     private previousButtons: Button[] = [];
+    private pollInFlight = false;
+    private pollGeneration = 0;
 
     // Enabled state
     private enabled: boolean = true;
@@ -157,10 +159,15 @@ export class Input {
     // Poll the backend for complete button state (not individual events)
     // This is more reliable when multiple frontend instances are polling
     private async pollButtonState(): Promise<void> {
-        if (!this.enabled) return;
+        if (!this.enabled || this.pollInFlight) return;
+
+        const generation = this.pollGeneration;
+        this.pollInFlight = true;
 
         try {
             const result = await call<[], { success: boolean; buttons: string[] }>('get_hidraw_button_state');
+
+            if (!this.enabled || generation !== this.pollGeneration) return;
 
             if (result && result.success && result.buttons) {
                 this.handleButtonState(result.buttons);
@@ -168,6 +175,8 @@ export class Input {
         } catch (error) {
             // Silently handle polling errors to avoid log spam
             // Health check will handle reconnection if needed
+        } finally {
+            this.pollInFlight = false;
         }
     }
 
@@ -306,6 +315,10 @@ export class Input {
 
     // Set enabled state
     setEnabled(enabled: boolean): void {
+        if (this.enabled !== enabled) {
+            this.pollGeneration++;
+            this.previousButtons = [];
+        }
         this.enabled = enabled;
         logger.info('Input', `Setting enabled state to: ${enabled}`);
 
@@ -366,6 +379,8 @@ export class Input {
             clearInterval(this.pollingInterval);
             this.pollingInterval = null;
         }
+        this.pollGeneration++;
+        this.previousButtons = [];
 
         if (this.timeoutId) clearTimeout(this.timeoutId);
         if (this.animationFrameId) cancelAnimationFrame(this.animationFrameId);

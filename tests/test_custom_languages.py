@@ -14,6 +14,7 @@ module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 
 normalize_custom_languages = module.normalize_custom_languages
+normalize_language_settings = module.normalize_language_settings
 
 
 class CustomLanguageTests(unittest.TestCase):
@@ -48,6 +49,31 @@ class CustomLanguageTests(unittest.TestCase):
                 {"alias": "Cantonese", "definition": "Cantonese"},
                 {"alias": "Yue", "definition": "Cantonese"},
             ])
+
+    def test_normalizes_language_settings_together(self):
+        languages, target = normalize_language_settings(
+            [{"alias": "  Yue  ", "definition": "  Cantonese  "}],
+            "  Cantonese  ",
+        )
+        self.assertEqual(languages, [{"alias": "Yue", "definition": "Cantonese"}])
+        self.assertEqual(target, "Cantonese")
+
+    def test_rejects_removed_selected_custom_language(self):
+        with self.assertRaisesRegex(ValueError, "removed custom language"):
+            normalize_language_settings(
+                [],
+                "Cantonese",
+                [{"alias": "Yue", "definition": "Cantonese"}],
+            )
+
+    def test_allows_clearing_removed_selected_custom_language(self):
+        languages, target = normalize_language_settings(
+            [],
+            "",
+            [{"alias": "Yue", "definition": "Cantonese"}],
+        )
+        self.assertEqual(languages, [])
+        self.assertEqual(target, "")
 
 
 if __name__ == "__main__":

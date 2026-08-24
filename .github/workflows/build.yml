@@ -38,7 +38,12 @@ jobs:
         run: npm install -g pnpm@9
 
       - name: Install frontend dependencies
-        run: pnpm install
+        run: pnpm install --frozen-lockfile
+
+      - name: Test frontend
+        run: |
+          pnpm test
+          pnpm exec tsc --noEmit
 
       - name: Build frontend
         run: pnpm run build
@@ -64,6 +69,11 @@ jobs:
       - name: Install cp311 packages for Decky Loader runtime
         run: |
           pip install evdev-binary -t dependencies_build/py_modules --no-cache-dir --python-version 3.11 --only-binary=:all: --platform manylinux_2_28_x86_64 --no-deps
+
+      - name: Test backend
+        run: |
+          PYTHONPATH="$PWD/dependencies_build/py_modules" python -m unittest discover -s tests -p 'test_*.py'
+          python -m compileall -q main.py py_modules/providers
 
       - name: Strip unnecessary packages and test files
         run: |

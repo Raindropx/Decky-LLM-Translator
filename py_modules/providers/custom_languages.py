@@ -47,3 +47,30 @@ def normalize_custom_languages(value):
         normalized.append({"alias": alias, "definition": definition})
 
     return normalized
+
+
+def normalize_language_settings(custom_languages, target_language, previous_custom_languages=()):
+    normalized_languages = normalize_custom_languages(custom_languages)
+    if not isinstance(target_language, str):
+        raise ValueError("Target language must be a string")
+    normalized_target = target_language.strip()
+    if len(normalized_target) > MAX_CUSTOM_LANGUAGE_DEFINITION_LENGTH:
+        raise ValueError(
+            "Target language must be at most "
+            f"{MAX_CUSTOM_LANGUAGE_DEFINITION_LENGTH} characters"
+        )
+
+    previous_definitions = {
+        item.get("definition")
+        for item in previous_custom_languages
+        if isinstance(item, dict)
+    }
+    next_definitions = {item["definition"] for item in normalized_languages}
+    if (
+        normalized_target
+        and normalized_target in previous_definitions
+        and normalized_target not in next_definitions
+    ):
+        raise ValueError("Target language references a removed custom language")
+
+    return normalized_languages, normalized_target

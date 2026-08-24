@@ -13,7 +13,7 @@ import { VFC, useState } from "react";
 import { useSettings } from "../SettingsContext";
 import { InputMode } from "../Input";
 import { useFontOptions, isRemoteFont, loadRemoteFont } from "../fonts";
-import { t } from "../i18n";
+import { PLUGIN_LANGUAGE_OPTIONS, t } from "../i18n";
 
 // Input mode options for dropdown
 const inputModeOptions = [
@@ -83,8 +83,7 @@ export const TabControls: VFC<TabControlsProps> = ({ inputDiagnostics }) => {
                         description={t("Choose the language used by the plugin interface")}
                         rgOptions={[
                             { label: t("System language"), data: "system" },
-                            { label: t("Chinese"), data: "zh-CN" },
-                            { label: t("English"), data: "en" },
+                            ...PLUGIN_LANGUAGE_OPTIONS,
                         ]}
                         selectedOption={settings.pluginLanguage}
                         onChange={(option) => updateSetting('pluginLanguage', option.data, t('Plugin Language'))}

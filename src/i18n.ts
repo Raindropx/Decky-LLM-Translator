@@ -1,8 +1,83 @@
-export type PluginLanguage = 'system' | 'en' | 'zh-CN';
-export type ResolvedPluginLocale = 'en' | 'zh-CN';
+import deStrings from './locales/de';
+import eoStrings from './locales/eo';
+import esStrings from './locales/es';
+import fiStrings from './locales/fi';
+import filStrings from './locales/fil';
+import frStrings from './locales/fr';
+import idStrings from './locales/id';
+import itStrings from './locales/it';
+import jaStrings from './locales/ja';
+import localeKeys from './locales/keys';
+import koStrings from './locales/ko';
+import msStrings from './locales/ms';
+import nanStrings from './locales/nan';
+import plStrings from './locales/pl';
+import ruStrings from './locales/ru';
+import thStrings from './locales/th';
+import tokStrings from './locales/tok';
+import viStrings from './locales/vi';
+
+export type ResolvedPluginLocale =
+    | 'en'
+    | 'zh-CN'
+    | 'ja'
+    | 'ko'
+    | 'ru'
+    | 'es'
+    | 'vi'
+    | 'fil'
+    | 'ms'
+    | 'ko-KP'
+    | 'fr'
+    | 'de'
+    | 'pl'
+    | 'id'
+    | 'nan'
+    | 'it'
+    | 'th'
+    | 'fi'
+    | 'tok'
+    | 'eo';
+
+export type PluginLanguage = 'system' | ResolvedPluginLocale;
+
+export const PLUGIN_LANGUAGE_OPTIONS: ReadonlyArray<{
+    label: string;
+    data: ResolvedPluginLocale;
+}> = [
+    { label: 'English', data: 'en' },
+    { label: '中文', data: 'zh-CN' },
+    { label: '日本語', data: 'ja' },
+    { label: '한국어', data: 'ko' },
+    { label: 'Русский', data: 'ru' },
+    { label: 'Español', data: 'es' },
+    { label: 'Tiếng Việt', data: 'vi' },
+    { label: 'Filipino', data: 'fil' },
+    { label: 'Bahasa Melayu', data: 'ms' },
+    { label: '조선말', data: 'ko-KP' },
+    { label: 'Français', data: 'fr' },
+    { label: 'Deutsch', data: 'de' },
+    { label: 'Polski', data: 'pl' },
+    { label: 'Bahasa Indonesia', data: 'id' },
+    { label: 'Bân-lâm-gí（閩南語）', data: 'nan' },
+    { label: 'Italiano', data: 'it' },
+    { label: 'ไทย', data: 'th' },
+    { label: 'Suomi', data: 'fi' },
+    { label: 'toki pona', data: 'tok' },
+    { label: 'Esperanto', data: 'eo' },
+];
 
 export const CHINESE_UI_FONT_FAMILY =
     '"Motiva Sans", "Noto Sans CJK SC", "Noto Sans SC", "Source Han Sans SC", sans-serif';
+
+export const JAPANESE_UI_FONT_FAMILY =
+    '"Motiva Sans", "Noto Sans CJK JP", "Noto Sans JP", "Source Han Sans JP", sans-serif';
+
+export const KOREAN_UI_FONT_FAMILY =
+    '"Motiva Sans", "Noto Sans CJK KR", "Noto Sans KR", "Source Han Sans KR", sans-serif';
+
+export const TRADITIONAL_CHINESE_UI_FONT_FAMILY =
+    '"Motiva Sans", "Noto Sans CJK TC", "Noto Sans TC", "Source Han Sans TC", sans-serif';
 
 type TranslationVariables = Record<string, string | number>;
 
@@ -25,6 +100,39 @@ const CHINESE_LANGUAGE_VALUES = new Set([
     'zh-tw',
 ]);
 
+const STEAM_LANGUAGE_LOCALES: Readonly<Record<string, ResolvedPluginLocale>> = {
+    english: 'en',
+    esperanto: 'eo',
+    filipino: 'fil',
+    finnish: 'fi',
+    french: 'fr',
+    german: 'de',
+    indonesian: 'id',
+    indonesia: 'id',
+    italian: 'it',
+    japanese: 'ja',
+    korean: 'ko',
+    koreana: 'ko',
+    latam: 'es',
+    malay: 'ms',
+    minnan: 'nan',
+    'min-nan': 'nan',
+    northkorean: 'ko-KP',
+    'north-korean': 'ko-KP',
+    polish: 'pl',
+    russian: 'ru',
+    spanish: 'es',
+    thai: 'th',
+    tokipona: 'tok',
+    'toki-pona': 'tok',
+    vietnamese: 'vi',
+};
+
+const MANUAL_PLUGIN_LANGUAGES = new Set<PluginLanguage>([
+    'system',
+    ...PLUGIN_LANGUAGE_OPTIONS.map((option) => option.data),
+]);
+
 function normalizeLanguage(value: unknown): string {
     return typeof value === 'string' ? value.trim().toLowerCase().replace(/_/g, '-') : '';
 }
@@ -32,6 +140,41 @@ function normalizeLanguage(value: unknown): string {
 function isChineseLanguage(value: unknown): boolean {
     const normalized = normalizeLanguage(value);
     return CHINESE_LANGUAGE_VALUES.has(normalized) || normalized.startsWith('zh-');
+}
+
+function localeFromLanguage(value: unknown, steamLanguage = false): ResolvedPluginLocale | undefined {
+    const normalized = normalizeLanguage(value);
+    if (!normalized) return undefined;
+    if (isChineseLanguage(normalized)) return 'zh-CN';
+    if (steamLanguage) {
+        const steamLocale = STEAM_LANGUAGE_LOCALES[normalized];
+        if (steamLocale) return steamLocale;
+    }
+
+    if (normalized === 'ko-kp') return 'ko-KP';
+    if (normalized === 'fil' || normalized.startsWith('fil-') || normalized === 'tl' || normalized.startsWith('tl-')) return 'fil';
+    if (normalized === 'nan' || normalized.startsWith('nan-')) return 'nan';
+    if (normalized === 'tok' || normalized.startsWith('tok-')) return 'tok';
+
+    const base = normalized.split('-')[0];
+    const browserLocales: Readonly<Record<string, ResolvedPluginLocale>> = {
+        de: 'de',
+        en: 'en',
+        eo: 'eo',
+        es: 'es',
+        fi: 'fi',
+        fr: 'fr',
+        id: 'id',
+        it: 'it',
+        ja: 'ja',
+        ko: 'ko',
+        ms: 'ms',
+        pl: 'pl',
+        ru: 'ru',
+        th: 'th',
+        vi: 'vi',
+    };
+    return browserLocales[base];
 }
 
 function firstLanguage(value: unknown): string {
@@ -60,14 +203,14 @@ export function detectSystemLocale(): ResolvedPluginLocale {
             steamWindow.g_rgLocalesToUse,
         ].map(firstLanguage).find(Boolean);
 
-        if (steamLanguage) return isChineseLanguage(steamLanguage) ? 'zh-CN' : 'en';
+        if (steamLanguage) return localeFromLanguage(steamLanguage, true) ?? 'en';
     } catch {
         // Steam globals are not available in browser-based development environments.
     }
 
     try {
         const browserLanguage = navigator.languages?.[0] || navigator.language;
-        if (browserLanguage) return isChineseLanguage(browserLanguage) ? 'zh-CN' : 'en';
+        if (browserLanguage) return localeFromLanguage(browserLanguage) ?? 'en';
     } catch {
         // Navigator can be unavailable in non-browser tests.
     }
@@ -76,13 +219,13 @@ export function detectSystemLocale(): ResolvedPluginLocale {
 }
 
 export function resolvePluginLocale(preference: PluginLanguage): ResolvedPluginLocale {
-    if (preference === 'zh-CN') return 'zh-CN';
-    if (preference === 'en') return 'en';
-    return detectSystemLocale();
+    return preference === 'system' ? detectSystemLocale() : preference;
 }
 
 export function normalizePluginLanguage(value: unknown): PluginLanguage {
-    return value === 'en' || value === 'zh-CN' || value === 'system' ? value : 'system';
+    return typeof value === 'string' && MANUAL_PLUGIN_LANGUAGES.has(value as PluginLanguage)
+        ? value as PluginLanguage
+        : 'system';
 }
 
 let currentLocale: ResolvedPluginLocale = detectSystemLocale();
@@ -97,7 +240,11 @@ export function getPluginLocale(): ResolvedPluginLocale {
 }
 
 export function getPluginUIFontFamily(locale: ResolvedPluginLocale): string | undefined {
-    return locale === 'zh-CN' ? CHINESE_UI_FONT_FAMILY : undefined;
+    if (locale === 'zh-CN') return CHINESE_UI_FONT_FAMILY;
+    if (locale === 'nan') return TRADITIONAL_CHINESE_UI_FONT_FAMILY;
+    if (locale === 'ja') return JAPANESE_UI_FONT_FAMILY;
+    if (locale === 'ko' || locale === 'ko-KP') return KOREAN_UI_FONT_FAMILY;
+    return undefined;
 }
 
 const zhCN: Record<string, string> = {
@@ -389,8 +536,55 @@ const zhCN: Record<string, string> = {
     'LLM endpoint is not configured': '尚未配置 LLM 端点',
 };
 
+type TranslationTable = Readonly<Record<string, string>>;
+
+function translationTableFromStrings(strings: readonly string[]): TranslationTable {
+    if (strings.length > localeKeys.length) {
+        throw new Error(`Invalid interface translation: expected at most ${localeKeys.length} strings, received ${strings.length}`);
+    }
+    return Object.fromEntries(strings.flatMap((value, index) => (
+        value.trim() ? [[localeKeys[index], value]] : []
+    )));
+}
+
+const koKPTranslations: TranslationTable = {
+    ...translationTableFromStrings(koStrings),
+    'Loading...': '적재 중…',
+    'System language': '체계 언어',
+    'Plugin Language': '추가기능 언어',
+    'Choose the language used by the plugin interface': '추가기능 조작면에 사용할 언어를 선택하십시오',
+    'Interface': '조작면',
+    'Plugin is enabled': '추가기능이 켜졌습니다',
+    'Plugin is disabled': '추가기능이 꺼졌습니다',
+    'Toggle the functionality on or off': '추가기능을 켜거나 끕니다',
+    'Save': '보관',
+    'Saving…': '보관 중…',
+};
+
+const translationTables: Readonly<Partial<Record<ResolvedPluginLocale, TranslationTable>>> = {
+    'zh-CN': zhCN,
+    ja: translationTableFromStrings(jaStrings),
+    ko: translationTableFromStrings(koStrings),
+    'ko-KP': koKPTranslations,
+    ru: translationTableFromStrings(ruStrings),
+    es: translationTableFromStrings(esStrings),
+    vi: translationTableFromStrings(viStrings),
+    fil: translationTableFromStrings(filStrings),
+    ms: translationTableFromStrings(msStrings),
+    fr: translationTableFromStrings(frStrings),
+    de: translationTableFromStrings(deStrings),
+    pl: translationTableFromStrings(plStrings),
+    id: translationTableFromStrings(idStrings),
+    nan: translationTableFromStrings(nanStrings),
+    it: translationTableFromStrings(itStrings),
+    th: translationTableFromStrings(thStrings),
+    fi: translationTableFromStrings(fiStrings),
+    tok: tokStrings,
+    eo: translationTableFromStrings(eoStrings),
+};
+
 export function t(key: string, variables?: TranslationVariables): string {
-    let result = currentLocale === 'zh-CN' ? (zhCN[key] ?? key) : key;
+    let result = translationTables[currentLocale]?.[key] ?? key;
     if (variables) {
         for (const [name, value] of Object.entries(variables)) {
             result = result.replace(new RegExp(`\\{${name}\\}`, 'g'), String(value));

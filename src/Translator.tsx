@@ -142,11 +142,6 @@ export class GameTranslatorLogic {
             this.shortcutInput.setEnabled(enabled);
         }
 
-        // Save to server settings file
-        call('set_setting', 'enabled', enabled).catch(error => {
-            logger.error('Translator', 'Failed to save enabled state to server', error);
-        });
-
         if (!enabled) {
             this.dismiss();
         }
@@ -349,6 +344,14 @@ export class GameTranslatorLogic {
         }
     }
 
+    private hideImageAfterRunDelay(runId: number, delayMs: number): void {
+        setTimeout(() => {
+            if (runId === this.currentRunId) {
+                this.imageState.hideImage();
+            }
+        }, delayMs);
+    }
+
     takeScreenshotAndTranslate = async (pauseBeforeCapture: boolean = false): Promise<void> => {
         // If already processing or disabled, return
         if (this.isProcessing || !this.enabled) {
@@ -453,10 +456,8 @@ export class GameTranslatorLogic {
                 // No text found, show message
                 this.imageState.updateProcessingStep("No text found");
 
-                // Hide overlay after a short delay
-                setTimeout(() => {
-                    this.imageState.hideImage();
-                }, 2000); // 2 seconds delay
+                // Hide overlay after a short delay, unless a newer run started.
+                this.hideImageAfterRunDelay(runId, 2000); // 2 seconds delay
             }
         } catch (error) {
             if (isCancelled()) {
@@ -470,30 +471,22 @@ export class GameTranslatorLogic {
             if (error instanceof NetworkError) {
                 const msg = error.message || "No internet connection";
                 this.imageState.updateProcessingStep(msg, true);
-                // Hide overlay after showing the error message
-                setTimeout(() => {
-                    this.imageState.hideImage();
-                }, 2500); // 2.5 seconds delay for network error
+                // Hide overlay after showing the error message.
+                this.hideImageAfterRunDelay(runId, 2500); // 2.5 seconds delay for network error
             } else if (error instanceof ApiKeyError) {
                 this.imageState.updateProcessingStep(error.message || "Invalid API key", true);
-                // Hide overlay after showing the error message
-                setTimeout(() => {
-                    this.imageState.hideImage();
-                }, 2500); // 2.5 seconds delay for API key error
+                // Hide overlay after showing the error message.
+                this.hideImageAfterRunDelay(runId, 2500); // 2.5 seconds delay for API key error
             } else if (error instanceof ModelNotAvailableError) {
                 this.imageState.updateProcessingStep(error.message, true);
-                setTimeout(() => {
-                    this.imageState.hideImage();
-                }, 3000);
+                this.hideImageAfterRunDelay(runId, 3000);
             } else if (error instanceof RateLimitError) {
                 this.imageState.updateProcessingStep(error.message, true);
-                // Hide overlay after showing the error message
-                setTimeout(() => {
-                    this.imageState.hideImage();
-                }, 3000); // 3 seconds delay for rate limit error
+                // Hide overlay after showing the error message.
+                this.hideImageAfterRunDelay(runId, 3000); // 3 seconds delay for rate limit error
             } else if (error instanceof LLMError) {
                 this.imageState.updateProcessingStep(error.message, true);
-                setTimeout(() => this.imageState.hideImage(), 3000);
+                this.hideImageAfterRunDelay(runId, 3000);
             } else {
                 this.imageState.hideImage();
             }
@@ -668,9 +661,7 @@ export class GameTranslatorLogic {
                 this.imageState.showTranslatedImage(result.base64, recognizedRegions);
             } else {
                 this.imageState.updateProcessingStep("No text found");
-                setTimeout(() => {
-                    if (!isCancelled()) this.imageState.hideImage();
-                }, 2000);
+                this.hideImageAfterRunDelay(runId, 2000);
             }
         } catch (error) {
             if (isCancelled()) {
@@ -688,9 +679,7 @@ export class GameTranslatorLogic {
             } else {
                 this.imageState.updateProcessingStep("OCR test failed", true);
             }
-            setTimeout(() => {
-                if (!isCancelled()) this.imageState.hideImage();
-            }, 3000);
+            this.hideImageAfterRunDelay(runId, 3000);
         } finally {
             if (!isCancelled()) {
                 this.isProcessing = false;

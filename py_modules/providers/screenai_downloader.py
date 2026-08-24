@@ -10,12 +10,18 @@ import threading
 import zipfile
 from typing import Dict, Optional
 
+from .download_verification import download_verified_response
+
 logger = logging.getLogger(__name__)
 
 # Linux CIPD build is x86_64-only; no arch suffix needed. Steam Deck fits.
 CIPD_PACKAGE = "chromium/third_party/screen-ai/linux"
-# Accepts a tag/ref or a 64-char SHA256 digest; "latest" tracks Chrome Stable.
-CIPD_VERSION = "latest"
+# Pinned content-addressed CIPD instance. Update deliberately after testing a
+# newer Chrome Screen AI build instead of following the moving "latest" ref.
+CIPD_VERSION = "2dcd56c67d330633f6da1035af0bcb78e2efa48925cde4bba0b462f4489e7b2c"
+CIPD_ARCHIVE_SHA256 = CIPD_VERSION
+CIPD_ARCHIVE_SIZE = 77_417_238
+MAX_CIPD_ARCHIVE_BYTES = 96 * 1024 * 1024
 CIPD_HOST = "https://chrome-infra-packages.appspot.com"
 PRPC_RESOLVE = f"{CIPD_HOST}/prpc/cipd.Repository/ResolveVersion"
 PRPC_GET_URL = f"{CIPD_HOST}/prpc/cipd.Repository/GetInstanceURL"
@@ -217,23 +223,25 @@ class ScreenAIDownloader:
             if resp.status_code != 200:
                 raise Exception(f"HTTP {resp.status_code} fetching package")
 
-            total = int(resp.headers.get("content-length") or 0)
-            downloaded = 0
+            def update_progress(downloaded: int):
+                with self._lock:
+                    # Cap at 95% so the bar isn't pinned during unzip.
+                    self._download_progress = min(
+                        0.95, downloaded / CIPD_ARCHIVE_SIZE * 0.95
+                    )
 
-            with open(zip_path, "wb") as f:
-                for chunk in resp.iter_content(chunk_size=1024 * 256):
-                    if self._download_cancel:
-                        raise Exception("Download cancelled")
-                    if not chunk:
-                        continue
-                    f.write(chunk)
-                    downloaded += len(chunk)
-                    if total > 0:
-                        with self._lock:
-                            # Cap at 95% so the bar isn't pinned during unzip.
-                            self._download_progress = min(
-                                0.95, downloaded / total * 0.95
-                            )
+            try:
+                download_verified_response(
+                    resp,
+                    zip_path,
+                    expected_sha256=CIPD_ARCHIVE_SHA256,
+                    expected_size=CIPD_ARCHIVE_SIZE,
+                    max_bytes=MAX_CIPD_ARCHIVE_BYTES,
+                    should_cancel=lambda: self._download_cancel,
+                    on_progress=update_progress,
+                )
+            finally:
+                resp.close()
 
             if self._download_cancel:
                 raise Exception("Download cancelled")
