@@ -47,8 +47,10 @@ class ReleasePackageUpdateTests(unittest.TestCase):
         self.assertNotIn("cat-in-a-box", workflow)
         self.assertNotIn('"Decky Translator.zip"', workflow)
         self.assertNotIn("decky-translator-plugin", workflow)
-        self.assertIn('"Decky LLM Translator.zip"', workflow)
+        self.assertIn("Decky LLM Translator.zip", workflow)
         self.assertIn("decky-llm-translator-plugin", workflow)
+        self.assertIn('STAGE="out/_staging/decky-llm-translator"', workflow)
+        self.assertNotIn("cli/decky plugin build", workflow)
 
 
 if __name__ == "__main__":
