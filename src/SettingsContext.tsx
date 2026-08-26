@@ -1,7 +1,8 @@
 // src/SettingsContext.tsx
 import React, { createContext, useCallback, useContext, useEffect, useReducer, useRef } from 'react';
 import { call } from '@decky/api';
-import { GameTranslatorLogic } from './Translator';
+import { GameTranslatorLogic, isRuntimeSettingsSnapshot } from './Translator';
+import type { RuntimeSettingsSnapshot } from './Translator';
 import { InputMode } from './Input';
 import { logger } from './Logger';
 import type { LLMEndpoint } from './LLMEndpoints';
@@ -126,20 +127,6 @@ interface SettingsContextType {
 
 const SettingsContext = createContext<SettingsContextType | undefined>(undefined);
 
-function buildLlmEndpointCacheKey(endpoint?: LLMEndpoint): string {
-    if (!endpoint) return '';
-    return JSON.stringify([
-        endpoint.id,
-        endpoint.provider,
-        endpoint.baseUrl,
-        endpoint.model,
-        endpoint.visionEnabled,
-        endpoint.temperature,
-        endpoint.maxTokens,
-        endpoint.enabled,
-    ]);
-}
-
 // Create the provider component
 interface SettingsProviderProps {
     children: React.ReactNode;
@@ -162,9 +149,7 @@ export const SettingsProvider: React.FC<SettingsProviderProps> = ({
         };
         dispatch({ type: 'UPDATE_SETTING', key: 'llmEndpoints', value: endpoints });
         dispatch({ type: 'UPDATE_SETTING', key: 'selectedLlmEndpointId', value: selectedId });
-        const active = endpoints.find((endpoint) => endpoint.id === selectedId);
-        logic.setHasSelectedLLMEndpoint(!!active && active.enabled);
-        logic.setLlmEndpointCacheKey(buildLlmEndpointCacheKey(active));
+        logic.setLlmEndpoints(endpoints, selectedId);
     }, [logic]);
 
     const refreshLlmEndpoints = useCallback(async () => {
@@ -175,7 +160,25 @@ export const SettingsProvider: React.FC<SettingsProviderProps> = ({
     // Load all settings at once
     const loadAllSettings = async () => {
         try {
-            const serverSettings = await call<[], any>('get_all_settings');
+            let serverSettings: (RuntimeSettingsSnapshot & Record<string, any>) | null = null;
+            const maxAttempts = 5;
+            for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+                try {
+                    const candidate = await call<[], unknown>('get_all_settings');
+                    if (isRuntimeSettingsSnapshot(candidate)) {
+                        serverSettings = candidate as RuntimeSettingsSnapshot & Record<string, any>;
+                        break;
+                    }
+
+                    logger.warn('SettingsContext', `Settings were not ready (attempt ${attempt}/${maxAttempts})`);
+                } catch (error) {
+                    logger.error('SettingsContext', `Failed to load settings (attempt ${attempt}/${maxAttempts})`, error);
+                }
+
+                if (attempt < maxAttempts) {
+                    await new Promise(resolve => setTimeout(resolve, attempt * 250));
+                }
+            }
 
             if (serverSettings) {
 
@@ -224,43 +227,9 @@ export const SettingsProvider: React.FC<SettingsProviderProps> = ({
                 settingsRef.current = { ...settingsRef.current, ...mappedSettings };
                 dispatch({ type: 'INITIALIZE_SETTINGS', settings: mappedSettings });
 
-                // Update logic instance with settings
-                logic.setInputLanguage(serverSettings.input_language);
-                logic.setTargetLanguage(serverSettings.target_language);
-                logic.setInputMode(serverSettings.input_mode);
-                logic.setEnabled(serverSettings.enabled);
-                logic.setHoldTimeTranslate(serverSettings.hold_time_translate);
-                logic.setHoldTimeDismiss(serverSettings.hold_time_dismiss);
-                logic.setConfidenceThreshold(serverSettings.confidence_threshold || 0.6); // Set in logic
-                logic.setPauseGameOnOverlay(serverSettings.pause_game_on_overlay || false); // Set pause on overlay setting
-                logic.setQuickToggleEnabled(serverSettings.quick_toggle_enabled || false); // Set quick toggle setting
-                logger.setEnabled(serverSettings.debug_mode || false); // Set debug mode for logger
-                logic.setPassthroughMode(serverSettings.passthrough_mode ?? false);
-                logic.setTextBoxOpacity(serverSettings.text_box_opacity ?? 80);
-                logic.setSteamScreenshotTranslationEnabled(
-                    serverSettings.steam_screenshot_translation_enabled ?? true,
-                );
-                logic.setSteamScreenshotKeepOriginal(
-                    serverSettings.steam_screenshot_keep_original ?? false,
-                );
-
-                // Set provider settings for upfront API key validation
-                logic.setOcrProvider(serverSettings.ocr_provider || "chromescreenai");
-                logic.setHasGoogleApiKey(!!serverSettings.google_api_key_configured);
-                logic.setHasGeminiApiKey(!!serverSettings.gemini_api_key_configured);
-                const activeEndpoint = (serverSettings.llm_endpoints ?? []).find(
-                    (endpoint: LLMEndpoint) => endpoint.id === serverSettings.selected_llm_endpoint_id
-                );
-                logic.setHasSelectedLLMEndpoint(!!activeEndpoint && activeEndpoint.enabled);
-                logic.setLlmEndpointCacheKey(buildLlmEndpointCacheKey(activeEndpoint));
-
-                logic.setFontScale(serverSettings.font_scale ?? 1.0);
-                logic.setGroupingPower(serverSettings.grouping_power ?? 0.25);
-                logic.setTranslatedTextAlignment(serverSettings.translated_text_alignment ?? 'center');
-                logic.setTranslatedTextFontFamily(serverSettings.translated_text_font_family ?? '');
-                logic.setTranslatedTextFontStyle(serverSettings.translated_text_font_style ?? 'normal');
-                logic.setHideIdenticalTranslations(serverSettings.hide_identical_translations ?? false);
-                logic.setAllowLabelGrowth(serverSettings.allow_label_growth ?? false);
+                // Keep the runtime logic synchronized even when this panel is the
+                // first frontend component Decky mounts after plugin startup.
+                logic.applyRuntimeSettings(serverSettings);
 
                 logger.info('SettingsContext', 'All settings loaded successfully');
                 logger.logObject('SettingsContext', 'Settings', mappedSettings);

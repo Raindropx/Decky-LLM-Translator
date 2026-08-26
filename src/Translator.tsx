@@ -13,11 +13,52 @@ import {
     SteamScreenshotResponse,
 } from "./SteamScreenshot";
 import { t } from "./i18n";
+import type { LLMEndpoint } from "./LLMEndpoints";
 
 // Screenshot response interface
 export interface ScreenshotResponse {
     path: string;
     base64: string;
+}
+
+export interface RuntimeSettingsSnapshot {
+    input_language: string;
+    target_language: string;
+    input_mode: InputMode;
+    enabled: boolean;
+    hold_time_translate: number;
+    hold_time_dismiss: number;
+    confidence_threshold: number;
+    pause_game_on_overlay: boolean;
+    quick_toggle_enabled: boolean;
+    debug_mode: boolean;
+    passthrough_mode: boolean;
+    text_box_opacity: number;
+    steam_screenshot_translation_enabled: boolean;
+    steam_screenshot_keep_original: boolean;
+    ocr_provider: 'rapidocr' | 'ocrspace' | 'googlecloud' | 'legacy_gemini_vision' | 'chromescreenai';
+    google_api_key_configured: boolean;
+    gemini_api_key_configured: boolean;
+    llm_endpoints: LLMEndpoint[];
+    selected_llm_endpoint_id: string;
+    font_scale: number;
+    grouping_power: number;
+    translated_text_alignment: 'left' | 'right' | 'center' | 'justify';
+    translated_text_font_family: string;
+    translated_text_font_style: 'normal' | 'bold' | 'italic' | 'bolditalic';
+    hide_identical_translations: boolean;
+    allow_label_growth: boolean;
+}
+
+export function isRuntimeSettingsSnapshot(value: unknown): value is RuntimeSettingsSnapshot {
+    if (typeof value !== 'object' || value === null) return false;
+    const settings = value as Partial<RuntimeSettingsSnapshot>;
+    return Number.isInteger(settings.input_mode)
+        && typeof settings.enabled === 'boolean'
+        && typeof settings.input_language === 'string'
+        && typeof settings.target_language === 'string'
+        && Array.isArray(settings.llm_endpoints)
+        && typeof settings.selected_llm_endpoint_id === 'string';
 }
 
 // Main app logic
@@ -39,6 +80,8 @@ export class GameTranslatorLogic {
     private steamScreenshotAnnotationInProgress = false;
     private steamScreenshotTranslationEnabled = true;
     private steamScreenshotKeepOriginal = false;
+    private runtimeSettingsApplied = false;
+    private disposed = false;
 
     // Provider settings for upfront validation
     private ocrProvider: string = "rapidocr";
@@ -62,6 +105,9 @@ export class GameTranslatorLogic {
 
         // Initialize for hidraw-based button detection
         this.shortcutInput = new Input();
+        // Runtime settings are loaded asynchronously. Keep the hard-coded input
+        // defaults from accepting a shortcut before the saved mode is known.
+        this.shortcutInput.setEnabled(false);
 
         // Set up listener for translate, dismiss, and toggle actions
         this.shortcutInput.onShortcutPressed((actionType: ActionType) => {
@@ -111,27 +157,77 @@ export class GameTranslatorLogic {
         this.loadInitialState();
     }
 
-    // Load initial state from server
+    // Load all runtime settings independently of the settings panel lifecycle.
+    // Decky can mount the global shortcut components before it mounts plugin
+    // content, so relying on SettingsProvider left the logic on its L5/no-LLM
+    // defaults until the user opened the panel.
     private async loadInitialState() {
-        try {
-            const result = await call<[], boolean>('get_enabled_state');
-            this.enabled = !!result;
-            logger.info('Translator', `Loaded initial enabled state: ${this.enabled}`);
+        const maxAttempts = 5;
+        for (let attempt = 1; attempt <= maxAttempts && !this.disposed; attempt++) {
+            try {
+                const settings = await call<[], unknown>('get_all_settings');
+                if (this.disposed) return;
 
-            if (this.shortcutInput) {
-                this.shortcutInput.setEnabled(this.enabled);
+                if (isRuntimeSettingsSnapshot(settings)) {
+                    // SettingsProvider may have completed first. In that case it
+                    // has the equally fresh snapshot and may already include a
+                    // user change, so do not overwrite it with this response.
+                    if (!this.runtimeSettingsApplied) {
+                        this.applyRuntimeSettings(settings);
+                    }
+                    logger.info('Translator', 'Runtime settings loaded at startup');
+
+                    if (!this.enabled) {
+                        logger.info('Translator', 'Plugin is disabled on startup, stopping hidraw monitor');
+                        call('stop_hidraw_monitor').catch(error => {
+                            logger.error('Translator', 'Failed to stop hidraw monitor on startup', error);
+                        });
+                    }
+                    return;
+                }
+
+                logger.warn('Translator', `Runtime settings were not ready (attempt ${attempt}/${maxAttempts})`);
+            } catch (error) {
+                logger.error('Translator', `Failed to load runtime settings (attempt ${attempt}/${maxAttempts})`, error);
             }
 
-            // If plugin starts disabled, stop the hidraw monitor that was auto-started
-            if (!this.enabled) {
-                logger.info('Translator', 'Plugin is disabled on startup, stopping hidraw monitor');
-                call('stop_hidraw_monitor').catch(error => {
-                    logger.error('Translator', 'Failed to stop hidraw monitor on startup', error);
-                });
+            if (attempt < maxAttempts) {
+                await new Promise(resolve => setTimeout(resolve, attempt * 250));
             }
-        } catch (error) {
-            logger.error('Translator', 'Failed to load initial state', error);
         }
+
+        logger.error('Translator', 'Runtime settings could not be loaded; shortcut input remains disabled');
+    }
+
+    applyRuntimeSettings(settings: RuntimeSettingsSnapshot): void {
+        this.setInputLanguage(settings.input_language);
+        this.setTargetLanguage(settings.target_language);
+        this.setInputMode(settings.input_mode);
+        this.setHoldTimeTranslate(settings.hold_time_translate);
+        this.setHoldTimeDismiss(settings.hold_time_dismiss);
+        this.setConfidenceThreshold(settings.confidence_threshold || 0.6);
+        this.setPauseGameOnOverlay(settings.pause_game_on_overlay || false);
+        this.setQuickToggleEnabled(settings.quick_toggle_enabled || false);
+        logger.setEnabled(settings.debug_mode || false);
+        this.setPassthroughMode(settings.passthrough_mode ?? false);
+        this.setTextBoxOpacity(settings.text_box_opacity ?? 80);
+        this.setSteamScreenshotTranslationEnabled(settings.steam_screenshot_translation_enabled ?? true);
+        this.setSteamScreenshotKeepOriginal(settings.steam_screenshot_keep_original ?? false);
+        this.setOcrProvider(settings.ocr_provider || "chromescreenai");
+        this.setHasGoogleApiKey(!!settings.google_api_key_configured);
+        this.setHasGeminiApiKey(!!settings.gemini_api_key_configured);
+        this.setLlmEndpoints(settings.llm_endpoints ?? [], settings.selected_llm_endpoint_id ?? '');
+        this.setFontScale(settings.font_scale ?? 1.0);
+        this.setGroupingPower(settings.grouping_power ?? 0.25);
+        this.setTranslatedTextAlignment(settings.translated_text_alignment ?? 'center');
+        this.setTranslatedTextFontFamily(settings.translated_text_font_family ?? '');
+        this.setTranslatedTextFontStyle(settings.translated_text_font_style ?? 'normal');
+        this.setHideIdenticalTranslations(settings.hide_identical_translations ?? false);
+        this.setAllowLabelGrowth(settings.allow_label_growth ?? false);
+
+        this.enabled = !!settings.enabled;
+        this.shortcutInput.setEnabled(this.enabled);
+        this.runtimeSettingsApplied = true;
     }
 
     // Add method to enable/disable the plugin
@@ -316,6 +412,7 @@ export class GameTranslatorLogic {
 
     // Clean up resources when plugin is unmounted
     cleanup(): void {
+        this.disposed = true;
         if (this.shortcutInput) {
             this.shortcutInput.unregister();
         }
@@ -802,6 +899,21 @@ export class GameTranslatorLogic {
             this.translationCache.clear();
             logger.debug('Translator', 'Translation cache cleared because the LLM endpoint changed');
         }
+    }
+
+    setLlmEndpoints = (endpoints: LLMEndpoint[], selectedId: string): void => {
+        const active = endpoints.find(endpoint => endpoint.id === selectedId);
+        this.setHasSelectedLLMEndpoint(!!active && active.enabled);
+        this.setLlmEndpointCacheKey(active ? JSON.stringify([
+            active.id,
+            active.provider,
+            active.baseUrl,
+            active.model,
+            active.visionEnabled,
+            active.temperature,
+            active.maxTokens,
+            active.enabled,
+        ]) : '');
     }
 
     private translationMethodHint(): string {
