@@ -49,8 +49,8 @@
   "remote_binary": [
     {
       "name": "plugin-dependencies.tar.gz",
-      "url": "https://github.com/Raindropx/Decky-LLM-Translator/releases/download/v0.3.1/plugin-dependencies.tar.gz",
-      "sha256hash": "b6f6318b9c38495783839cf465f661f16f943314271d784cd648047b19506f37"
+      "url": "https://github.com/Raindropx/Decky-LLM-Translator/releases/download/v0.5.0/plugin-dependencies.tar.gz",
+      "sha256hash": "95bbd890cf07d5f46c67fbee3ebc8234893bc568b14b6942bf312bad6ce7a086"
     }
   ]
 }
