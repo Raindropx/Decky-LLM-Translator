@@ -50,13 +50,15 @@ export enum InputMode {
 export enum ActionType {
     TRANSLATE = 0,
     DISMISS = 1,
-    TOGGLE_TRANSLATIONS = 2
+    TOGGLE_TRANSLATIONS = 2,
+    ASK_AI = 3,
 }
 
 export interface ProgressInfo {
     active: boolean;
     progress: number;
     forDismiss: boolean;
+    actionType: ActionType | null;
 }
 
 // Mapping from hidraw button names to Button enum
@@ -117,6 +119,10 @@ export class Input {
     private cooldownDuration = 150; // 0.15s cooldown
 
     private inputMode: InputMode = InputMode.L5_BUTTON;
+    private askAIInputMode: InputMode = InputMode.R5_BUTTON;
+    private askAIAvailable = false;
+    private activeShortcutMode: InputMode | null = null;
+    private activeShortcutAction: ActionType | null = null;
 
     private translateHoldTime = 1000;
     private dismissHoldTime = 500;
@@ -335,6 +341,8 @@ export class Input {
             this.rightTouchpadTouched = false;
             this.currentlyPressedButtons.clear();
             this.steamScreenshotComboActive = false;
+            this.activeShortcutMode = null;
+            this.activeShortcutAction = null;
         }
     }
 
@@ -381,6 +389,8 @@ export class Input {
         }
         this.pollGeneration++;
         this.previousButtons = [];
+        this.activeShortcutMode = null;
+        this.activeShortcutAction = null;
 
         if (this.timeoutId) clearTimeout(this.timeoutId);
         if (this.animationFrameId) cancelAnimationFrame(this.animationFrameId);
@@ -395,15 +405,49 @@ export class Input {
     setInputMode(mode: InputMode): void {
         logger.info('Input', `Setting input mode to ${InputMode[mode]}`);
         this.inputMode = mode;
+        this.resetShortcutTracking();
+    }
+
+    setAskAIInputMode(mode: InputMode): void {
+        logger.info('Input', `Setting Ask AI input mode to ${InputMode[mode]}`);
+        this.askAIInputMode = mode;
+        this.resetShortcutTracking();
+    }
+
+    getAskAIInputMode(): InputMode {
+        return this.askAIInputMode;
+    }
+
+    setAskAIAvailable(available: boolean): void {
+        if (this.askAIAvailable === available) return;
+
+        logger.info('Input', `Ask AI shortcut availability set to ${available}`);
+        this.askAIAvailable = available;
+
+        // Cancel an in-flight Ask AI hold as soon as its source result becomes
+        // unavailable. This keeps the shortcut fully inert when there is no
+        // OCR or translation context to ask about.
+        if (!available && this.activeShortcutAction === ActionType.ASK_AI) {
+            this.stopProgressAnimation();
+            this.leftTouchpadTouched = false;
+            this.rightTouchpadTouched = false;
+            this.activeShortcutMode = null;
+            this.activeShortcutAction = null;
+        }
+    }
+
+    private resetShortcutTracking(): void {
         this.inCooldown = false;
         this.waitingForRelease = false;
         this.touchStartTime = null;
         this.leftTouchpadTouched = false;
         this.rightTouchpadTouched = false;
+        this.activeShortcutMode = null;
+        this.activeShortcutAction = null;
         if (this.timeoutId) clearTimeout(this.timeoutId);
         if (this.animationFrameId) cancelAnimationFrame(this.animationFrameId);
         if (this.clearCooldownTimeoutId) clearTimeout(this.clearCooldownTimeoutId);
-        this.notifyProgressListeners({ active: false, progress: 0, forDismiss: this.overlayVisible });
+        this.notifyProgressListeners({ active: false, progress: 0, forDismiss: false, actionType: null });
     }
 
     getInputMode(): InputMode {
@@ -456,7 +500,9 @@ export class Input {
             inCooldown: this.inCooldown,
             waitingForRelease: this.waitingForRelease,
             overlayVisible: this.overlayVisible,
+            askAIAvailable: this.askAIAvailable,
             inputMode: InputMode[this.inputMode],
+            askAIInputMode: InputMode[this.askAIInputMode],
             translateHoldTime: this.translateHoldTime,
             dismissHoldTime: this.dismissHoldTime,
             currentButtons: Array.from(this.currentlyPressedButtons),
@@ -465,51 +511,56 @@ export class Input {
     }
 
     private updateProgressAnimation(): void {
+        const actionType = this.activeShortcutAction;
+        const forDismiss = this.activeShortcutAction === ActionType.DISMISS;
         if (this.touchStartTime === null) {
             if (this.animationFrameId) cancelAnimationFrame(this.animationFrameId);
             this.animationFrameId = null;
-            this.notifyProgressListeners({ active: false, progress: 0, forDismiss: this.overlayVisible });
+            this.notifyProgressListeners({ active: false, progress: 0, forDismiss, actionType });
             return;
         }
         const now = Date.now();
         const elapsed = now - this.touchStartTime;
-        const required = this.overlayVisible ? this.dismissHoldTime : this.translateHoldTime;
+        const required = forDismiss ? this.dismissHoldTime : this.translateHoldTime;
         const progress = Math.min(elapsed / required, 1);
-        this.notifyProgressListeners({ active: true, progress, forDismiss: this.overlayVisible });
+        this.notifyProgressListeners({ active: true, progress, forDismiss, actionType });
         if (progress < 1) {
             this.animationFrameId = requestAnimationFrame(() => this.updateProgressAnimation());
         } else {
-            this.notifyProgressListeners({ active: false, progress: 0, forDismiss: this.overlayVisible });
+            this.notifyProgressListeners({ active: false, progress: 0, forDismiss, actionType });
             if (this.animationFrameId) cancelAnimationFrame(this.animationFrameId);
             this.animationFrameId = null;
         }
     }
 
     private stopProgressAnimation(): void {
+        const actionType = this.activeShortcutAction;
+        const forDismiss = this.activeShortcutAction === ActionType.DISMISS;
         this.touchStartTime = null;
         if (this.timeoutId) clearTimeout(this.timeoutId);
         if (this.animationFrameId) cancelAnimationFrame(this.animationFrameId);
         this.timeoutId = null;
         this.animationFrameId = null;
-        this.notifyProgressListeners({ active: false, progress: 0, forDismiss: this.overlayVisible });
+        this.notifyProgressListeners({ active: false, progress: 0, forDismiss, actionType });
     }
 
     private OnButtonsPressed(buttons: Button[]): void {
-        logger.debug('Input', `OnButtonsPressed: buttons=[${buttons.join(',')}], mode=${InputMode[this.inputMode]}, waiting=${this.waitingForRelease}, cooldown=${this.inCooldown}`);
+        logger.debug(
+            'Input',
+            `OnButtonsPressed: buttons=[${buttons.join(',')}], translate=${InputMode[this.inputMode]}, askAI=${InputMode[this.askAIInputMode]}, waiting=${this.waitingForRelease}, cooldown=${this.inCooldown}`,
+        );
 
         if (!this.enabled) {
             logger.debug('Input', 'Plugin is disabled, ignoring input');
             return;
         }
 
-        // Enforce cooldown by timestamp
         if (this.inCooldown) {
             const since = Date.now() - this.lastActionTime;
             if (since < this.cooldownDuration) {
                 logger.debug('Input', `In cooldown, skipping. since: ${since}`);
                 return;
             }
-            logger.debug('Input', 'Cooldown expired');
             this.inCooldown = false;
             if (this.clearCooldownTimeoutId) {
                 clearTimeout(this.clearCooldownTimeoutId);
@@ -517,37 +568,19 @@ export class Input {
             }
         }
 
-        // Quick toggle: when overlay is visible and in combo mode, single right button toggles overlay
-        if (this.quickToggleEnabled && this.overlayVisible && !this.waitingForRelease) {
-            let rightOnlyPressed = false;
-            let rightButtonName = '';
+        const translationState = this.getInputModeState(buttons, this.inputMode);
+        const rawAskAIState = this.getInputModeState(buttons, this.askAIInputMode);
+        const askAIState = this.askAIAvailable
+            ? rawAskAIState
+            : { ...rawAskAIState, pressed: false };
 
-            switch (this.inputMode) {
-                case InputMode.L4_R4_COMBO:
-                    // R4 pressed but L4 not pressed
-                    rightOnlyPressed = buttons.includes(Button.R4) && !buttons.includes(Button.L4);
-                    rightButtonName = 'R4';
-                    break;
-                case InputMode.L5_R5_COMBO:
-                    // R5 pressed but L5 not pressed
-                    rightOnlyPressed = buttons.includes(Button.R5) && !buttons.includes(Button.L5);
-                    rightButtonName = 'R5';
-                    break;
-                case InputMode.L3_R3_COMBO:
-                    // R3 pressed but L3 not pressed
-                    rightOnlyPressed = buttons.includes(Button.R3) && !buttons.includes(Button.L3);
-                    rightButtonName = 'R3';
-                    break;
-                case InputMode.TOUCHPAD_COMBO:
-                    rightOnlyPressed = buttons.includes(Button.RIGHT_TOUCHPAD_TOUCH) && !buttons.includes(Button.LEFT_TOUCHPAD_TOUCH);
-                    rightButtonName = 'RPAD';
-                    break;
-            }
-
-            if (rightOnlyPressed) {
-                logger.info('Input', `Quick toggle triggered by ${rightButtonName}`);
+        // Preserve the existing quick-toggle behavior, but never let it consume
+        // a button combination that is currently matching Ask AI.
+        if (this.quickToggleEnabled && this.overlayVisible && !this.waitingForRelease && !askAIState.pressed) {
+            const quickToggleButton = this.getQuickToggleButton(buttons);
+            if (quickToggleButton) {
+                logger.info('Input', `Quick toggle triggered by ${quickToggleButton}`);
                 this.onButtonsPressedListeners.forEach(cb => cb(ActionType.TOGGLE_TRANSLATIONS));
-                // Set a brief cooldown to prevent rapid toggling
                 this.inCooldown = true;
                 this.lastActionTime = Date.now();
                 this.clearCooldownTimeoutId = setTimeout(() => {
@@ -558,136 +591,127 @@ export class Input {
             }
         }
 
-        // Determine button state based on input mode
-        let buttonPressed = false;
-        let buttonName = '';
-
-        switch (this.inputMode) {
-            case InputMode.L4_BUTTON:
-                buttonPressed = buttons.includes(Button.L4);
-                buttonName = 'L4';
-                break;
-
-            case InputMode.R4_BUTTON:
-                buttonPressed = buttons.includes(Button.R4);
-                buttonName = 'R4';
-                break;
-
-            case InputMode.L5_BUTTON:
-                buttonPressed = buttons.includes(Button.L5);
-                buttonName = 'L5';
-                break;
-
-            case InputMode.R5_BUTTON:
-                buttonPressed = buttons.includes(Button.R5);
-                buttonName = 'R5';
-                break;
-
-            case InputMode.L4_R4_COMBO:
-                const l4Pressed = buttons.includes(Button.L4);
-                const r4Pressed = buttons.includes(Button.R4);
-                buttonPressed = l4Pressed && r4Pressed;
-                buttonName = 'L4+R4';
-                break;
-
-            case InputMode.L5_R5_COMBO:
-                const l5Pressed = buttons.includes(Button.L5);
-                const r5Pressed = buttons.includes(Button.R5);
-                buttonPressed = l5Pressed && r5Pressed;
-                buttonName = 'L5+R5';
-                break;
-
-            case InputMode.L3_BUTTON:
-                buttonPressed = buttons.includes(Button.L3);
-                buttonName = 'L3';
-                break;
-
-            case InputMode.R3_BUTTON:
-                buttonPressed = buttons.includes(Button.R3);
-                buttonName = 'R3';
-                break;
-
-            case InputMode.L3_R3_COMBO:
-                const l3Pressed = buttons.includes(Button.L3);
-                const r3Pressed = buttons.includes(Button.R3);
-                buttonPressed = l3Pressed && r3Pressed;
-                buttonName = 'L3+R3';
-                break;
-
-            case InputMode.TOUCHPAD_COMBO:
-                const leftTouchpadPressed = buttons.includes(Button.LEFT_TOUCHPAD_TOUCH);
-                const rightTouchpadPressed = buttons.includes(Button.RIGHT_TOUCHPAD_TOUCH);
-                buttonPressed = leftTouchpadPressed && rightTouchpadPressed;
-                buttonName = 'LPAD+RPAD';
-                break;
-        }
-
         if (this.waitingForRelease) {
-            logger.debug('Input', 'waitingForRelease, checking release');
-
-            if (!buttonPressed) {
-                logger.debug('Input', `${buttonName} released, clearing waitingForRelease`);
+            if (!translationState.pressed && !askAIState.pressed) {
+                logger.debug('Input', 'All shortcut buttons released');
+                this.stopProgressAnimation();
                 this.waitingForRelease = false;
-                // Without this, the next press is ignored
                 this.leftTouchpadTouched = false;
                 this.rightTouchpadTouched = false;
-                this.stopProgressAnimation();
-                return;
+                this.activeShortcutMode = null;
+                this.activeShortcutAction = null;
             } else {
                 this.stopProgressAnimation();
-                return;
             }
+            return;
         }
 
-        // Handle button press
-        this.handleButtonCombination(buttonPressed);
+        const translationAction = this.overlayVisible ? ActionType.DISMISS : ActionType.TRANSLATE;
+        const candidate = askAIState.pressed
+            && (!translationState.pressed || askAIState.specificity >= translationState.specificity)
+            ? { mode: this.askAIInputMode, action: ActionType.ASK_AI, label: askAIState.label }
+            : translationState.pressed
+                ? { mode: this.inputMode, action: translationAction, label: translationState.label }
+                : null;
+
+        if (!candidate) {
+            if (this.activeShortcutMode !== null) {
+                logger.debug('Input', `${InputMode[this.activeShortcutMode]} released, stopping progress`);
+                this.stopProgressAnimation();
+            }
+            this.leftTouchpadTouched = false;
+            this.rightTouchpadTouched = false;
+            this.activeShortcutMode = null;
+            this.activeShortcutAction = null;
+            return;
+        }
+
+        if (this.activeShortcutMode !== candidate.mode || this.activeShortcutAction !== candidate.action) {
+            this.stopProgressAnimation();
+            this.leftTouchpadTouched = false;
+            this.rightTouchpadTouched = false;
+            this.activeShortcutMode = candidate.mode;
+            this.activeShortcutAction = candidate.action;
+        }
+
+        this.handleShortcutCandidate(candidate.label, candidate.mode, candidate.action);
     }
 
-    // Handle button press (works for all input modes)
-    private handleButtonCombination(buttonPressed: boolean): void {
+    private getInputModeState(buttons: Button[], mode: InputMode): {
+        pressed: boolean;
+        label: string;
+        specificity: number;
+    } {
+        switch (mode) {
+            case InputMode.L4_BUTTON: return { pressed: buttons.includes(Button.L4), label: 'L4', specificity: 1 };
+            case InputMode.R4_BUTTON: return { pressed: buttons.includes(Button.R4), label: 'R4', specificity: 1 };
+            case InputMode.L5_BUTTON: return { pressed: buttons.includes(Button.L5), label: 'L5', specificity: 1 };
+            case InputMode.R5_BUTTON: return { pressed: buttons.includes(Button.R5), label: 'R5', specificity: 1 };
+            case InputMode.L3_BUTTON: return { pressed: buttons.includes(Button.L3), label: 'L3', specificity: 1 };
+            case InputMode.R3_BUTTON: return { pressed: buttons.includes(Button.R3), label: 'R3', specificity: 1 };
+            case InputMode.L4_R4_COMBO:
+                return { pressed: buttons.includes(Button.L4) && buttons.includes(Button.R4), label: 'L4+R4', specificity: 2 };
+            case InputMode.L5_R5_COMBO:
+                return { pressed: buttons.includes(Button.L5) && buttons.includes(Button.R5), label: 'L5+R5', specificity: 2 };
+            case InputMode.L3_R3_COMBO:
+                return { pressed: buttons.includes(Button.L3) && buttons.includes(Button.R3), label: 'L3+R3', specificity: 2 };
+            case InputMode.TOUCHPAD_COMBO:
+                return {
+                    pressed: buttons.includes(Button.LEFT_TOUCHPAD_TOUCH) && buttons.includes(Button.RIGHT_TOUCHPAD_TOUCH),
+                    label: 'LPAD+RPAD',
+                    specificity: 2,
+                };
+        }
+    }
+
+    private getQuickToggleButton(buttons: Button[]): string {
+        switch (this.inputMode) {
+            case InputMode.L4_R4_COMBO:
+                return buttons.includes(Button.R4) && !buttons.includes(Button.L4) ? 'R4' : '';
+            case InputMode.L5_R5_COMBO:
+                return buttons.includes(Button.R5) && !buttons.includes(Button.L5) ? 'R5' : '';
+            case InputMode.L3_R3_COMBO:
+                return buttons.includes(Button.R3) && !buttons.includes(Button.L3) ? 'R3' : '';
+            case InputMode.TOUCHPAD_COMBO:
+                return buttons.includes(Button.RIGHT_TOUCHPAD_TOUCH) && !buttons.includes(Button.LEFT_TOUCHPAD_TOUCH) ? 'RPAD' : '';
+            default:
+                return '';
+        }
+    }
+
+    private handleShortcutCandidate(modeName: string, mode: InputMode, actionType: ActionType): void {
         const wasButtonPressed = this.leftTouchpadTouched && this.rightTouchpadTouched;
-        const modeName = InputMode[this.inputMode];
-
-        logger.debug('Input', `handleButtonCombination: buttonPressed=${buttonPressed}, wasButtonPressed=${wasButtonPressed}, touchStartTime=${this.touchStartTime !== null}`);
-
-        if (buttonPressed && !wasButtonPressed && !this.inCooldown && !this.waitingForRelease) {
-            logger.info('Input', `${modeName} pressed, starting hold timer. overlayVisible=${this.overlayVisible}`);
-            if (this.touchStartTime === null) {
-                this.touchStartTime = Date.now();
-                this.updateProgressAnimation();
-                const holdTime = this.overlayVisible ? this.dismissHoldTime : this.translateHoldTime;
-                logger.debug('Input', `Starting timeout for ${holdTime}ms`);
-                this.timeoutId = setTimeout(() => {
-                    logger.debug('Input', `${modeName} timeout fired, leftTouched=${this.leftTouchpadTouched}, rightTouched=${this.rightTouchpadTouched}`);
-                    if (this.leftTouchpadTouched && this.rightTouchpadTouched) {
-                        this.inCooldown = true;
-                        this.lastActionTime = Date.now();
-                        const actionType = this.overlayVisible ? ActionType.DISMISS : ActionType.TRANSLATE;
-                        logger.info('Input', `Action triggered: ${ActionType[actionType]}`);
-                        this.onButtonsPressedListeners.forEach(cb => cb(actionType));
-                        this.stopProgressAnimation();
-                        this.waitingForRelease = true;
-                        if (this.clearCooldownTimeoutId) clearTimeout(this.clearCooldownTimeoutId);
-                        this.clearCooldownTimeoutId = setTimeout(() => {
-                            logger.debug('Input', 'Cooldown and waiting ended');
-                            this.inCooldown = false;
-                            this.waitingForRelease = false;
-                            this.clearCooldownTimeoutId = null;
-                        }, this.cooldownDuration);
-                    }
-                    this.timeoutId = null;
-                }, holdTime);
-            }
-        } else if (!buttonPressed && wasButtonPressed) {
-            logger.debug('Input', `${modeName} released, stopping progress`);
-            this.stopProgressAnimation();
-        } else {
-            logger.debug('Input', `${modeName} no action: buttonPressed=${buttonPressed}, wasButtonPressed=${wasButtonPressed}, inCooldown=${this.inCooldown}, waitingForRelease=${this.waitingForRelease}`);
+        if (!wasButtonPressed && !this.inCooldown) {
+            logger.info('Input', `${modeName} pressed, starting ${ActionType[actionType]} hold timer`);
+            this.touchStartTime = Date.now();
+            this.updateProgressAnimation();
+            const holdTime = actionType === ActionType.DISMISS
+                ? this.dismissHoldTime
+                : this.translateHoldTime;
+            this.timeoutId = setTimeout(() => {
+                const stillActive = this.leftTouchpadTouched
+                    && this.rightTouchpadTouched
+                    && this.activeShortcutMode === mode
+                    && this.activeShortcutAction === actionType;
+                if (stillActive) {
+                    this.inCooldown = true;
+                    this.lastActionTime = Date.now();
+                    logger.info('Input', `Action triggered: ${ActionType[actionType]}`);
+                    this.onButtonsPressedListeners.forEach(cb => cb(actionType));
+                    this.stopProgressAnimation();
+                    this.waitingForRelease = true;
+                    if (this.clearCooldownTimeoutId) clearTimeout(this.clearCooldownTimeoutId);
+                    this.clearCooldownTimeoutId = setTimeout(() => {
+                        this.inCooldown = false;
+                        this.clearCooldownTimeoutId = null;
+                    }, this.cooldownDuration);
+                }
+                this.timeoutId = null;
+            }, holdTime);
         }
 
-        // Update state (reusing touchpad vars for button state)
-        this.leftTouchpadTouched = buttonPressed;
-        this.rightTouchpadTouched = buttonPressed;
+        this.leftTouchpadTouched = true;
+        this.rightTouchpadTouched = true;
     }
 
     onShortcutPressed(callback: (actionType: ActionType) => void): void {

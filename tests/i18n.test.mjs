@@ -225,6 +225,7 @@ test('every interface locale translates core controls and preserves placeholders
         ' + {count} dyslexia',
         'Hold to Dismiss ({time}s)',
         'Hold to Translate ({time}s)',
+        'Hold to Ask AI ({time}s)',
     ];
     const placeholders = (value) => [...value.matchAll(/\{([^}]+)\}/g)].map((match) => match[1]).sort();
     const untranslatedCore = [];

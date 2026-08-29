@@ -99,6 +99,11 @@ from providers.screenshot_paths import (
     resolve_private_screenshot_path,
 )
 from providers.settings_io import write_settings_updates
+from providers.shortcut_settings import (
+    DEFAULT_TRANSLATION_INPUT_MODE,
+    choose_distinct_ask_ai_input_mode,
+    normalize_input_mode,
+)
 from providers.llm_translation import (
     LLMConfigurationError,
     LLMResponseError,
@@ -1190,7 +1195,8 @@ class Plugin:
     _input_language: str = "auto"  # Default to auto-detect
     _target_language: str = "en"
     _custom_languages: list = []
-    _input_mode: int = 0  # 0 = both touchpads, 1 = left touchpad, 2 = right touchpad
+    _input_mode: int = DEFAULT_TRANSLATION_INPUT_MODE
+    _ask_ai_input_mode: int = 3
     _hold_time_translate: int = 1000  # Default to 1 second
     _hold_time_dismiss: int = 500  # Default to 0.5 seconds for dismissal
     _confidence_threshold: float = 0.6  # Default confidence threshold
@@ -1347,6 +1353,15 @@ class Plugin:
         try:
             if key == "custom_languages":
                 value = normalize_custom_languages(value)
+            elif key in {"input_mode", "ask_ai_input_mode"}:
+                value = normalize_input_mode(value)
+                other_mode = (
+                    self._ask_ai_input_mode
+                    if key == "input_mode"
+                    else self._input_mode
+                )
+                if value == other_mode:
+                    raise ValueError("Ask AI shortcut must differ from translation shortcut")
             elif key == "plugin_language" and value not in {
                 "system",
                 "en",
@@ -1373,6 +1388,7 @@ class Plugin:
                 raise ValueError("Unsupported plugin language")
             elif key in {
                 "passthrough_mode",
+                "passthrough_always_on_top",
                 "steam_screenshot_translation_enabled",
                 "steam_screenshot_keep_original",
             }:
@@ -1393,6 +1409,8 @@ class Plugin:
                 self._input_language = value
             elif key == "input_mode":
                 self._input_mode = value
+            elif key == "ask_ai_input_mode":
+                self._ask_ai_input_mode = value
             elif key == "enabled":
                 if self._provider_manager:
                     if value:
@@ -1482,6 +1500,8 @@ class Plugin:
                 self._quick_toggle_enabled = value
             elif key == "passthrough_mode":
                 pass  # frontend-only, normalized and persisted above
+            elif key == "passthrough_always_on_top":
+                pass  # frontend-only, normalized and persisted above
             elif key == "text_box_opacity":
                 pass  # frontend-only, normalized and persisted above
             elif key == "steam_screenshot_translation_enabled":
@@ -1558,6 +1578,7 @@ class Plugin:
                 "input_language": self._input_language,
                 "custom_languages": self._custom_languages,
                 "input_mode": self._input_mode,
+                "ask_ai_input_mode": self._ask_ai_input_mode,
                 "enabled": self._settings.get_setting("enabled", True),
                 "use_free_providers": self._use_free_providers,
                 "ocr_provider": self._ocr_provider,
@@ -1578,6 +1599,9 @@ class Plugin:
                 "quick_toggle_enabled": self._settings.get_setting("quick_toggle_enabled", False),
                 "debug_mode": self._settings.get_setting("debug_mode", False),
                 "passthrough_mode": self._settings.get_setting("passthrough_mode", False),
+                "passthrough_always_on_top": self._settings.get_setting(
+                    "passthrough_always_on_top", False
+                ),
                 "text_box_opacity": self._settings.get_setting("text_box_opacity", 80),
                 "steam_screenshot_translation_enabled": self._settings.get_setting(
                     "steam_screenshot_translation_enabled", True
@@ -2344,6 +2368,7 @@ class Plugin:
                 self._settings.set_setting("custom_languages", self._custom_languages),
                 self._settings.set_setting("google_api_key", self._google_vision_api_key),
                 self._settings.set_setting("input_mode", self._input_mode),
+                self._settings.set_setting("ask_ai_input_mode", self._ask_ai_input_mode),
                 self._settings.set_setting("input_language", self._input_language),
                 self._settings.set_setting("hold_time_translate", self._hold_time_translate),
                 self._settings.set_setting("hold_time_dismiss", self._hold_time_dismiss),
@@ -2730,6 +2755,53 @@ class Plugin:
             logger.error(traceback.format_exc())
             return None
 
+    async def ask_ai(self, screen_regions, question_parts):
+        try:
+            endpoint = next(
+                (
+                    item for item in self._llm_endpoints
+                    if item.get("id") == self._selected_llm_endpoint_id
+                    and item.get("enabled", True)
+                ),
+                None,
+            )
+            if not endpoint:
+                return {
+                    "error": "endpoint_not_configured",
+                    "message": "Select and configure an LLM endpoint",
+                }
+
+            endpoint_id = endpoint["id"]
+            api_key = self._llm_endpoint_secrets.get(endpoint_id, "")
+            provider = OpenAICompatibleLLMProvider(endpoint, api_key)
+            start_time = time.time()
+            answer = await provider.ask(screen_regions, question_parts)
+            logger.info(
+                "Ask AI completed in %.2fs using endpoint %s",
+                time.time() - start_time,
+                endpoint_id,
+            )
+            return {"answer": answer}
+        except NetworkError as e:
+            logger.error(f"Network error during Ask AI: {e}")
+            return {"error": "network_error", "message": str(e)}
+        except ApiKeyError as e:
+            logger.error(f"API key error during Ask AI: {e}")
+            return {"error": "api_key_error", "message": str(e) or "Invalid API key"}
+        except RateLimitError as e:
+            logger.error(f"Rate limit during Ask AI: {e}")
+            return {"error": "rate_limit_error", "message": str(e)}
+        except LLMConfigurationError as e:
+            logger.error(f"Ask AI configuration error: {e}")
+            return {"error": "llm_configuration_error", "message": str(e)}
+        except LLMResponseError as e:
+            logger.error(f"Ask AI response error: {e}")
+            return {"error": "llm_response_error", "message": str(e)}
+        except Exception as e:
+            logger.error(f"Ask AI error: {e}")
+            logger.error(traceback.format_exc())
+            return {"error": "ask_ai_error", "message": "Ask AI failed"}
+
     async def get_enabled_state(self):
         return await self.get_setting("enabled", True)
 
@@ -3028,7 +3100,23 @@ class Plugin:
             except ValueError as custom_language_error:
                 self._custom_languages = []
                 logger.warning(f"Ignoring invalid custom languages: {custom_language_error}")
-            self._input_mode = load_setting("input_mode", self._input_mode)
+            try:
+                self._input_mode = normalize_input_mode(
+                    load_setting("input_mode", self._input_mode)
+                )
+            except ValueError:
+                self._input_mode = DEFAULT_TRANSLATION_INPUT_MODE
+                self._settings.set_setting("input_mode", self._input_mode)
+                logger.warning("Reset invalid translation shortcut input mode")
+
+            saved_ask_ai_input_mode = self._settings.get_setting("ask_ai_input_mode")
+            self._ask_ai_input_mode = choose_distinct_ask_ai_input_mode(
+                self._input_mode,
+                saved_ask_ai_input_mode,
+            )
+            if saved_ask_ai_input_mode != self._ask_ai_input_mode:
+                self._settings.set_setting("ask_ai_input_mode", self._ask_ai_input_mode)
+                logger.info("Initialized a distinct Ask AI shortcut input mode")
             self._hold_time_translate = load_setting("hold_time_translate", self._hold_time_translate)
             self._hold_time_dismiss = load_setting("hold_time_dismiss", self._hold_time_dismiss)
             if self._settings.get_setting("custom_recognition_settings", False):

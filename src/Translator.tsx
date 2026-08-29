@@ -14,6 +14,7 @@ import {
 } from "./SteamScreenshot";
 import { t } from "./i18n";
 import type { LLMEndpoint } from "./LLMEndpoints";
+import { AskAIController } from "./AskAI";
 
 // Screenshot response interface
 export interface ScreenshotResponse {
@@ -25,6 +26,7 @@ export interface RuntimeSettingsSnapshot {
     input_language: string;
     target_language: string;
     input_mode: InputMode;
+    ask_ai_input_mode: InputMode;
     enabled: boolean;
     hold_time_translate: number;
     hold_time_dismiss: number;
@@ -33,6 +35,7 @@ export interface RuntimeSettingsSnapshot {
     quick_toggle_enabled: boolean;
     debug_mode: boolean;
     passthrough_mode: boolean;
+    passthrough_always_on_top: boolean;
     text_box_opacity: number;
     steam_screenshot_translation_enabled: boolean;
     steam_screenshot_keep_original: boolean;
@@ -54,6 +57,7 @@ export function isRuntimeSettingsSnapshot(value: unknown): value is RuntimeSetti
     if (typeof value !== 'object' || value === null) return false;
     const settings = value as Partial<RuntimeSettingsSnapshot>;
     return Number.isInteger(settings.input_mode)
+        && Number.isInteger(settings.ask_ai_input_mode)
         && typeof settings.enabled === 'boolean'
         && typeof settings.input_language === 'string'
         && typeof settings.target_language === 'string'
@@ -65,6 +69,7 @@ export function isRuntimeSettingsSnapshot(value: unknown): value is RuntimeSetti
 export class GameTranslatorLogic {
     private isProcessing = false;
     public imageState: ImageState;
+    public readonly askAI: AskAIController;
     private textRecognizer: TextRecognizer;
     private textTranslator: TextTranslator;
     private translationCache = new LastTranslationCache();
@@ -100,6 +105,7 @@ export class GameTranslatorLogic {
 
     constructor(imageState: ImageState) {
         this.imageState = imageState;
+        this.askAI = new AskAIController(imageState);
         this.textRecognizer = new TextRecognizer();
         this.textTranslator = new TextTranslator();
 
@@ -114,7 +120,13 @@ export class GameTranslatorLogic {
             // Only process inputs if the plugin is enabled
             if (!this.enabled) return;
 
-            if (actionType === ActionType.DISMISS) {
+            if (actionType === ActionType.ASK_AI) {
+                if (!this.askAI.canOpen()) {
+                    logger.debug('Translator', 'Ask AI shortcut ignored because no OCR or translation result is available');
+                    return;
+                }
+                this.askAI.open();
+            } else if (actionType === ActionType.DISMISS) {
                 this.dismiss();
             } else if (actionType === ActionType.TOGGLE_TRANSLATIONS) {
                 // Toggle translations action
@@ -140,6 +152,7 @@ export class GameTranslatorLogic {
 
         imageState.onStateChanged((visible, _, __, ___, ____, _____, ______, _______, ________) => {
             this.shortcutInput.setOverlayVisible(visible);
+            this.shortcutInput.setAskAIAvailable(this.askAI.canOpen());
 
             if (!this.enabled) return;
 
@@ -203,6 +216,7 @@ export class GameTranslatorLogic {
         this.setInputLanguage(settings.input_language);
         this.setTargetLanguage(settings.target_language);
         this.setInputMode(settings.input_mode);
+        this.setAskAIInputMode(settings.ask_ai_input_mode);
         this.setHoldTimeTranslate(settings.hold_time_translate);
         this.setHoldTimeDismiss(settings.hold_time_dismiss);
         this.setConfidenceThreshold(settings.confidence_threshold || 0.6);
@@ -210,6 +224,7 @@ export class GameTranslatorLogic {
         this.setQuickToggleEnabled(settings.quick_toggle_enabled || false);
         logger.setEnabled(settings.debug_mode || false);
         this.setPassthroughMode(settings.passthrough_mode ?? false);
+        this.setPassthroughAlwaysOnTop(settings.passthrough_always_on_top ?? false);
         this.setTextBoxOpacity(settings.text_box_opacity ?? 80);
         this.setSteamScreenshotTranslationEnabled(settings.steam_screenshot_translation_enabled ?? true);
         this.setSteamScreenshotKeepOriginal(settings.steam_screenshot_keep_original ?? false);
@@ -323,6 +338,10 @@ export class GameTranslatorLogic {
         }
     }
 
+    setPassthroughAlwaysOnTop = (enabled: boolean): void => {
+        this.imageState.setPassthroughAlwaysOnTop(enabled);
+    }
+
     // Method to get pause game on overlay state
     getPauseGameOnOverlay = (): boolean => {
         return this.pauseGameOnOverlay;
@@ -413,6 +432,7 @@ export class GameTranslatorLogic {
     // Clean up resources when plugin is unmounted
     cleanup(): void {
         this.disposed = true;
+        this.askAI.cleanup();
         if (this.shortcutInput) {
             this.shortcutInput.unregister();
         }
@@ -435,9 +455,32 @@ export class GameTranslatorLogic {
     dismiss = (): void => {
         this.currentRunId++;
         this.isProcessing = false;
+        this.askAI.invalidateScreen();
         if (this.imageState.isVisible()) {
             this.imageState.hideImage();
             this.shortcutInput.setOverlayVisible(false);
+        }
+    }
+
+    canAskAI = (): boolean => {
+        return this.hasSelectedLLMEndpoint && this.askAI.canOpen();
+    }
+
+    openAskAI = (): void => {
+        if (!this.hasSelectedLLMEndpoint) {
+            void this.notify(
+                "Select an LLM endpoint before asking AI",
+                2600,
+                "Configure an endpoint in the Translation settings tab.",
+            );
+            return;
+        }
+        if (!this.askAI.open()) {
+            void this.notify(
+                "Translate a screen before asking AI",
+                2600,
+                "Ask AI needs a completed translation overlay.",
+            );
         }
     }
 
@@ -538,6 +581,7 @@ export class GameTranslatorLogic {
                     }
                 }
 
+                const askAIContextRegions = translatedRegions;
                 if (this.hideIdenticalTranslations) {
                     const before = translatedRegions.length;
                     translatedRegions = translatedRegions.filter(r =>
@@ -548,7 +592,11 @@ export class GameTranslatorLogic {
                     }
                 }
 
-                this.imageState.showTranslatedImage(result.base64, translatedRegions);
+                this.imageState.showTranslatedImage(
+                    result.base64,
+                    translatedRegions,
+                    askAIContextRegions,
+                );
             } else {
                 // No text found, show message
                 this.imageState.updateProcessingStep("No text found");
@@ -814,6 +862,14 @@ export class GameTranslatorLogic {
     // Method to get current input mode
     getInputMode = (): InputMode => {
         return this.shortcutInput.getInputMode();
+    }
+
+    setAskAIInputMode = (mode: InputMode): void => {
+        this.shortcutInput.setAskAIInputMode(mode);
+    }
+
+    getAskAIInputMode = (): InputMode => {
+        return this.shortcutInput.getAskAIInputMode();
     }
 
     // Method to set translation hold time

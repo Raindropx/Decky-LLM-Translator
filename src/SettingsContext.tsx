@@ -20,6 +20,7 @@ export interface Settings {
     targetLanguage: string;
     customLanguages: CustomLanguage[];
     inputMode: InputMode;
+    askAIInputMode: InputMode;
     enabled: boolean;
     initialized: boolean;
     holdTimeTranslate: number;
@@ -38,6 +39,7 @@ export interface Settings {
     geminiModel: string; // Gemini model to use
     debugMode: boolean; // Debug mode for verbose console logging
     passthroughMode: boolean; // Show live game content behind translated labels
+    passthroughAlwaysOnTop: boolean; // Keep passthrough labels above Steam UI
     textBoxOpacity: number; // Passthrough label background opacity (0-100)
     steamScreenshotTranslationEnabled: boolean; // Composite visible translations into STEAM+R1 screenshots
     steamScreenshotKeepOriginal: boolean; // Preserve native screenshot and create translated copy
@@ -66,6 +68,7 @@ const initialSettings: Settings = {
     targetLanguage: "",
     customLanguages: [],
     inputMode: InputMode.L5_BUTTON,  // Default to L5 back button
+    askAIInputMode: InputMode.R5_BUTTON,
     enabled: true,
     initialized: false,
     holdTimeTranslate: 1000, // Default to 1 second (1000ms)
@@ -84,6 +87,7 @@ const initialSettings: Settings = {
     geminiModel: "gemini-2.5-flash", // Default Gemini model
     debugMode: false, // Debug mode off by default
     passthroughMode: false,
+    passthroughAlwaysOnTop: false,
     textBoxOpacity: 80,
     steamScreenshotTranslationEnabled: true,
     steamScreenshotKeepOriginal: false,
@@ -189,6 +193,7 @@ export const SettingsProvider: React.FC<SettingsProviderProps> = ({
                     targetLanguage: serverSettings.target_language,
                     customLanguages: serverSettings.custom_languages ?? [],
                     inputMode: serverSettings.input_mode,
+                    askAIInputMode: serverSettings.ask_ai_input_mode,
                     enabled: serverSettings.enabled,
                     holdTimeTranslate: serverSettings.hold_time_translate,
                     holdTimeDismiss: serverSettings.hold_time_dismiss,
@@ -206,6 +211,7 @@ export const SettingsProvider: React.FC<SettingsProviderProps> = ({
                     geminiModel: serverSettings.gemini_model || "gemini-2.5-flash",
                     debugMode: serverSettings.debug_mode || false,
                     passthroughMode: serverSettings.passthrough_mode ?? false,
+                    passthroughAlwaysOnTop: serverSettings.passthrough_always_on_top ?? false,
                     textBoxOpacity: serverSettings.text_box_opacity ?? 80,
                     steamScreenshotTranslationEnabled: serverSettings.steam_screenshot_translation_enabled ?? true,
                     steamScreenshotKeepOriginal: serverSettings.steam_screenshot_keep_original ?? false,
@@ -261,6 +267,9 @@ export const SettingsProvider: React.FC<SettingsProviderProps> = ({
             case 'inputMode':
                 logic.setInputMode(logicValue);
                 break;
+            case 'askAIInputMode':
+                logic.setAskAIInputMode(logicValue);
+                break;
             case 'enabled':
                 logic.setEnabled(logicValue);
                 break;
@@ -284,6 +293,9 @@ export const SettingsProvider: React.FC<SettingsProviderProps> = ({
                 break;
             case 'passthroughMode':
                 logic.setPassthroughMode(logicValue);
+                break;
+            case 'passthroughAlwaysOnTop':
+                logic.setPassthroughAlwaysOnTop(logicValue);
                 break;
             case 'textBoxOpacity':
                 logic.setTextBoxOpacity(logicValue);
@@ -329,6 +341,14 @@ export const SettingsProvider: React.FC<SettingsProviderProps> = ({
 
     // Update a single setting
     const updateSetting = async (key: keyof Settings, value: any, label?: string): Promise<boolean> => {
+        if (
+            (key === 'inputMode' && value === settingsRef.current.askAIInputMode)
+            || (key === 'askAIInputMode' && value === settingsRef.current.inputMode)
+        ) {
+            logic.notify(t('Ask AI shortcut must be different from the translation shortcut'), 2500);
+            return false;
+        }
+
         const previousValue = settingsRef.current[key];
         const updateVersion = (settingUpdateVersionsRef.current[key] ?? 0) + 1;
         settingUpdateVersionsRef.current[key] = updateVersion;
@@ -351,6 +371,7 @@ export const SettingsProvider: React.FC<SettingsProviderProps> = ({
                 targetLanguage: 'target_language',
                 customLanguages: 'custom_languages',
                 inputMode: 'input_mode',
+                askAIInputMode: 'ask_ai_input_mode',
                 enabled: 'enabled',
                 initialized: 'initialized',
                 holdTimeTranslate: 'hold_time_translate',
@@ -369,6 +390,7 @@ export const SettingsProvider: React.FC<SettingsProviderProps> = ({
                 geminiModel: 'gemini_model',
                 debugMode: 'debug_mode',
                 passthroughMode: 'passthrough_mode',
+                passthroughAlwaysOnTop: 'passthrough_always_on_top',
                 textBoxOpacity: 'text_box_opacity',
                 steamScreenshotTranslationEnabled: 'steam_screenshot_translation_enabled',
                 steamScreenshotKeepOriginal: 'steam_screenshot_keep_original',

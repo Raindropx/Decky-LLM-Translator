@@ -25,7 +25,7 @@ import { BsTranslate } from "react-icons/bs";
 import { ImageState, ImageOverlay } from "./Overlay";
 import { GameTranslatorLogic } from "./Translator";
 import { cleanupAllFontDOM } from "./fonts";
-import { ProgressInfo } from "./Input";
+import { ActionType, ProgressInfo } from "./Input";
 import { ActivationIndicator } from "./ActivationIndicator";
 import { SettingsProvider, useSettings } from "./SettingsContext";
 import { logger } from "./Logger";
@@ -250,7 +250,8 @@ const HoldActivationIndicator: VFC<{ logic: GameTranslatorLogic }> = ({logic}) =
     const [progressInfo, setProgressInfo] = useState<ProgressInfo>({
         active: false,
         progress: 0,
-        forDismiss: false
+        forDismiss: false,
+        actionType: null,
     });
 
     useEffect(() => {
@@ -271,13 +272,15 @@ const HoldActivationIndicator: VFC<{ logic: GameTranslatorLogic }> = ({logic}) =
                 setProgressInfo({
                     active: true,
                     progress: 1.0,
-                    forDismiss: info.forDismiss
+                    forDismiss: info.forDismiss,
+                    actionType: info.actionType,
                 });
                 hideTimeout = setTimeout(() => {
                     setProgressInfo({
                         active: false,
                         progress: 0,
-                        forDismiss: info.forDismiss
+                        forDismiss: info.forDismiss,
+                        actionType: info.actionType,
                     });
                 }, 600); // 600ms delay - covers screenshot capture time
             } else {
@@ -303,9 +306,13 @@ const HoldActivationIndicator: VFC<{ logic: GameTranslatorLogic }> = ({logic}) =
                 ? logic.getHoldTimeDismiss()
                 : logic.getHoldTimeTranslate()
         ) / 1000;
-        return progressInfo.forDismiss
-            ? t('Hold to Dismiss ({time}s)', { time: timeRequired })
-            : t('Hold to Translate ({time}s)', { time: timeRequired });
+        if (progressInfo.forDismiss) {
+            return t('Hold to Dismiss ({time}s)', { time: timeRequired });
+        }
+        if (progressInfo.actionType === ActionType.ASK_AI) {
+            return t('Hold to Ask AI ({time}s)', { time: timeRequired });
+        }
+        return t('Hold to Translate ({time}s)', { time: timeRequired });
     };
 
     // Only show the indicator if the plugin is enabled

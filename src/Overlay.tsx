@@ -1,6 +1,6 @@
 // Overlay.tsx - Handles overlay components and UI
 
-import { findModuleChild } from "@decky/ui";
+import { DialogButton, findModuleChild, Focusable } from "@decky/ui";
 
 
 import { VFC, useEffect, useState, useRef, useCallback, useMemo } from "react";
@@ -9,6 +9,7 @@ import { logger } from "./Logger";
 import { buildTranslatedFontFamily, ensureFontLoaded, resolveFontStyleCSS } from "./fonts";
 import type { FontStyleOption } from "./fonts";
 import { t } from "./i18n";
+import { getTranslationOverlayZIndex } from "./OverlayLayer";
 
 export type HorizontalTextAlignment = 'left' | 'right' | 'center' | 'justify';
 
@@ -26,6 +27,25 @@ export interface ScreenshotOverlaySnapshot {
     textBoxOpacity: number;
 }
 
+export interface AskAIOverlaySnapshot {
+    revision: number;
+    regions: TranslatedRegion[];
+    contextRegions: TranslatedRegion[];
+    displayRegionContextIndices: number[];
+}
+
+export interface SelectedTranslatedRegion {
+    index: number;
+    region: TranslatedRegion;
+}
+
+export type RegionSelectionCancelReason = 'user' | 'stale';
+
+type RegionSelectionChangedListener = (
+    active: boolean,
+    selectedIndices: number[]
+) => void;
+
 type ImageStateChangedListener = (
     visible: boolean,
     imageData: string,
@@ -41,6 +61,7 @@ type ImageStateChangedListener = (
     translatedTextFontFamily: string,
     translatedTextFontStyle: FontStyleOption,
     passthroughMode: boolean,
+    passthroughAlwaysOnTop: boolean,
     textBoxOpacity: number
 ) => void;
 
@@ -83,6 +104,8 @@ export class ImageState {
     private visible = false;
     private imageData = "";
     private translatedRegions: TranslatedRegion[] = [];
+    private askAIContextRegions: TranslatedRegion[] = [];
+    private displayRegionContextIndices: number[] = [];
     private loading = false;
     private processingStep = ""; // Added to track current processing step
     private processingDetail = "";
@@ -95,8 +118,16 @@ export class ImageState {
     private translatedTextFontFamily = "";
     private translatedTextFontStyle: FontStyleOption = 'normal';
     private passthroughMode = false;
+    private passthroughAlwaysOnTop = false;
     private textBoxOpacity = 80;
     private onStateChangedListeners: ImageStateChangedListener[] = [];
+    private overlayRevision = 0;
+    private regionSelectionActive = false;
+    private selectedRegionIndices: number[] = [];
+    private translationsVisibleBeforeSelection = true;
+    private onRegionSelectionChangedListeners: RegionSelectionChangedListener[] = [];
+    private onRegionSelectionComplete: ((selected: SelectedTranslatedRegion[]) => void) | null = null;
+    private onRegionSelectionCancel: ((reason: RegionSelectionCancelReason) => void) | null = null;
 
     onStateChanged(callback: ImageStateChangedListener): void {
         this.onStateChangedListeners.push(callback);
@@ -109,8 +140,21 @@ export class ImageState {
         }
     }
 
+    onRegionSelectionChanged(callback: RegionSelectionChangedListener): void {
+        this.onRegionSelectionChangedListeners.push(callback);
+    }
+
+    offRegionSelectionChanged(callback: RegionSelectionChangedListener): void {
+        const index = this.onRegionSelectionChangedListeners.indexOf(callback);
+        if (index !== -1) {
+            this.onRegionSelectionChangedListeners.splice(index, 1);
+        }
+    }
+
     // Show the overlay with loading indicator immediately
     startLoading(step: string = "Capturing"): void {
+        this.invalidateRegionSelection();
+        this.overlayRevision++;
         // Set internal state immediately
         this.visible = true;
         this.loading = true;
@@ -196,6 +240,11 @@ export class ImageState {
         return this.passthroughMode;
     }
 
+    setPassthroughAlwaysOnTop(enabled: boolean): void {
+        this.passthroughAlwaysOnTop = enabled;
+        this.notifyListeners();
+    }
+
     setTextBoxOpacity(opacity: number): void {
         this.textBoxOpacity = Math.max(0, Math.min(100, opacity));
         this.notifyListeners();
@@ -225,6 +274,84 @@ export class ImageState {
         };
     }
 
+    getAskAIOverlaySnapshot(): AskAIOverlaySnapshot | null {
+        if (!this.visible || this.loading || this.askAIContextRegions.length === 0) {
+            return null;
+        }
+
+        return {
+            revision: this.overlayRevision,
+            regions: this.cloneTranslatedRegions(),
+            contextRegions: this.askAIContextRegions.map(region => this.cloneTranslatedRegion(region)),
+            displayRegionContextIndices: [...this.displayRegionContextIndices],
+        };
+    }
+
+    beginRegionSelection(
+        expectedRevision: number,
+        onComplete: (selected: SelectedTranslatedRegion[]) => void,
+        onCancel: (reason: RegionSelectionCancelReason) => void
+    ): boolean {
+        if (
+            expectedRevision !== this.overlayRevision ||
+            !this.visible ||
+            this.loading ||
+            this.translatedRegions.length === 0
+        ) {
+            onCancel('stale');
+            return false;
+        }
+
+        this.invalidateRegionSelection();
+        this.regionSelectionActive = true;
+        this.selectedRegionIndices = [];
+        this.translationsVisibleBeforeSelection = this.translationsVisible;
+        this.translationsVisible = true;
+        this.onRegionSelectionComplete = onComplete;
+        this.onRegionSelectionCancel = onCancel;
+        this.notifyListeners();
+        this.notifyRegionSelectionListeners();
+        return true;
+    }
+
+    toggleRegionSelection(index: number): void {
+        if (!this.regionSelectionActive || index < 0 || index >= this.translatedRegions.length) {
+            return;
+        }
+
+        const selectedAt = this.selectedRegionIndices.indexOf(index);
+        if (selectedAt === -1) {
+            this.selectedRegionIndices.push(index);
+        } else {
+            this.selectedRegionIndices.splice(selectedAt, 1);
+        }
+        this.notifyRegionSelectionListeners();
+    }
+
+    confirmRegionSelection(): void {
+        if (!this.regionSelectionActive || this.selectedRegionIndices.length === 0) {
+            return;
+        }
+
+        const selected = this.selectedRegionIndices.map(index => ({
+            index,
+            region: this.cloneTranslatedRegion(this.translatedRegions[index]),
+        }));
+        const onComplete = this.onRegionSelectionComplete;
+        this.finishRegionSelection();
+        onComplete?.(selected);
+    }
+
+    cancelRegionSelection(reason: RegionSelectionCancelReason = 'user'): void {
+        if (!this.regionSelectionActive) {
+            return;
+        }
+
+        const onCancel = this.onRegionSelectionCancel;
+        this.finishRegionSelection();
+        onCancel?.(reason);
+    }
+
     // Update the current processing step
     updateProcessingStep(step: string, isError: boolean = false, detail: string = ""): void {
         this.processingStep = t(step);
@@ -237,6 +364,8 @@ export class ImageState {
     }
 
     showImage(imageData: string): void {
+        this.invalidateRegionSelection();
+        this.overlayRevision++;
         // Clear any pending timer
         if (this.loadingIndicatorTimer) {
             clearTimeout(this.loadingIndicatorTimer);
@@ -248,6 +377,8 @@ export class ImageState {
 
         // Clear any previous translations
         this.translatedRegions = [];
+        this.askAIContextRegions = [];
+        this.displayRegionContextIndices = [];
 
         // Ensure the overlay is visible
         this.visible = true;
@@ -264,7 +395,11 @@ export class ImageState {
         this.notifyListeners();
     }
 
-    showTranslatedImage(imageData: string, regions: TranslatedRegion[]): void {
+    showTranslatedImage(
+        imageData: string,
+        regions: TranslatedRegion[],
+        askAIContextRegions: TranslatedRegion[] = regions
+    ): void {
         // Clear any pending timer
         if (this.loadingIndicatorTimer) {
             clearTimeout(this.loadingIndicatorTimer);
@@ -276,6 +411,8 @@ export class ImageState {
 
         // Set the translated regions
         this.translatedRegions = regions;
+        this.askAIContextRegions = askAIContextRegions;
+        this.displayRegionContextIndices = regions.map(region => askAIContextRegions.indexOf(region));
 
         // Ensure the overlay is visible
         this.visible = true;
@@ -295,6 +432,8 @@ export class ImageState {
     }
 
     hideImage(): void {
+        this.invalidateRegionSelection();
+        this.overlayRevision++;
         // Clear any pending timer
         if (this.loadingIndicatorTimer) {
             clearTimeout(this.loadingIndicatorTimer);
@@ -312,6 +451,8 @@ export class ImageState {
         // Important: Clear the image data and regions to prevent reuse
         this.imageData = "";
         this.translatedRegions = [];
+        this.askAIContextRegions = [];
+        this.displayRegionContextIndices = [];
 
         logger.debug('ImageState', 'Hiding image and clearing all state');
 
@@ -320,8 +461,47 @@ export class ImageState {
 
     private notifyListeners(): void {
         for (const callback of this.onStateChangedListeners) {
-            callback(this.visible, this.imageData, this.translatedRegions, this.loading, this.processingStep, this.processingDetail, this.processingIsError, this.translationsVisible, this.fontScale, this.allowLabelGrowth, this.translatedTextAlignment, this.translatedTextFontFamily, this.translatedTextFontStyle, this.passthroughMode, this.textBoxOpacity);
+            callback(this.visible, this.imageData, this.translatedRegions, this.loading, this.processingStep, this.processingDetail, this.processingIsError, this.translationsVisible, this.fontScale, this.allowLabelGrowth, this.translatedTextAlignment, this.translatedTextFontFamily, this.translatedTextFontStyle, this.passthroughMode, this.passthroughAlwaysOnTop, this.textBoxOpacity);
         }
+    }
+
+    private notifyRegionSelectionListeners(): void {
+        const selected = [...this.selectedRegionIndices];
+        for (const callback of this.onRegionSelectionChangedListeners) {
+            callback(this.regionSelectionActive, selected);
+        }
+    }
+
+    private finishRegionSelection(): void {
+        this.regionSelectionActive = false;
+        this.selectedRegionIndices = [];
+        this.translationsVisible = this.translationsVisibleBeforeSelection;
+        this.onRegionSelectionComplete = null;
+        this.onRegionSelectionCancel = null;
+        this.notifyListeners();
+        this.notifyRegionSelectionListeners();
+    }
+
+    private invalidateRegionSelection(): void {
+        if (!this.regionSelectionActive) {
+            return;
+        }
+
+        const onCancel = this.onRegionSelectionCancel;
+        this.finishRegionSelection();
+        onCancel?.('stale');
+    }
+
+    private cloneTranslatedRegion(region: TranslatedRegion): TranslatedRegion {
+        return {
+            ...region,
+            rect: { ...region.rect },
+            bgColor: region.bgColor ? [...region.bgColor] : undefined,
+        };
+    }
+
+    private cloneTranslatedRegions(): TranslatedRegion[] {
+        return this.translatedRegions.map(region => this.cloneTranslatedRegion(region));
     }
 
     isVisible(): boolean {
@@ -453,8 +633,14 @@ export const TranslatedTextOverlay: VFC<{
     translatedTextFontFamily: string,
     translatedTextFontStyle: FontStyleOption,
     passthroughMode: boolean,
-    textBoxOpacity: number
-}> = ({ visible, imageData, regions, loading, processingStep, processingDetail, processingIsError, translationsVisible, fontScale, allowLabelGrowth, translatedTextAlignment, translatedTextFontFamily, translatedTextFontStyle, passthroughMode, textBoxOpacity }) => {
+    passthroughAlwaysOnTop: boolean,
+    textBoxOpacity: number,
+    regionSelectionActive: boolean,
+    selectedRegionIndices: number[],
+    onToggleRegionSelection: (index: number) => void,
+    onConfirmRegionSelection: () => void,
+    onCancelRegionSelection: () => void
+}> = ({ visible, imageData, regions, loading, processingStep, processingDetail, processingIsError, translationsVisible, fontScale, allowLabelGrowth, translatedTextAlignment, translatedTextFontFamily, translatedTextFontStyle, passthroughMode, passthroughAlwaysOnTop, textBoxOpacity, regionSelectionActive, selectedRegionIndices, onToggleRegionSelection, onConfirmRegionSelection, onCancelRegionSelection }) => {
     // Composition layer is handled by CompositionRequest below -- only mounted when visible
 
     // Ref to the screenshot image element
@@ -560,7 +746,7 @@ export const TranslatedTextOverlay: VFC<{
 
     return (
         <>
-        {visible && <CompositionRequest level={UIComposition.Notification} />}
+        {visible && <CompositionRequest level={regionSelectionActive ? UIComposition.Overlay : UIComposition.Notification} />}
         <div id='translation-overlay'
              style={{
                  height: "100vh",
@@ -568,13 +754,22 @@ export const TranslatedTextOverlay: VFC<{
                  display: "flex",
                  justifyContent: "center",
                  alignItems: "center",
-                 zIndex: 7002,
+                 // Decky renders global components after Steam's router. Passive
+                 // passthrough therefore has to live in the negative stack: it
+                 // remains visible over the native game plane, while Steam UI
+                 // routes and modals paint above it. Selection mode returns to
+                 // the active layer so its controls stay focusable.
+                 zIndex: getTranslationOverlayZIndex(
+                     passthroughMode,
+                     regionSelectionActive,
+                     passthroughAlwaysOnTop,
+                 ),
                  position: "fixed",
                  top: 0,
                  left: 0,
                  backgroundColor: "transparent",
                  opacity: visible ? 1 : 0,
-                 pointerEvents: visible && !passthroughMode ? "auto" : "none",
+                 pointerEvents: visible && (regionSelectionActive || !passthroughMode) ? "auto" : "none",
              }}>
 
             {/* Screenshot with Translations */}
@@ -590,12 +785,12 @@ export const TranslatedTextOverlay: VFC<{
                         src={formattedImageData}
                         onLoad={updateImageDimensions}
                         style={{
-                            visibility: passthroughMode ? "hidden" : "visible",
+                            visibility: passthroughMode && !regionSelectionActive ? "hidden" : "visible",
                             maxHeight: "calc(100vh - 2px)",
                             maxWidth: "calc(100vw - 2px)",
                             objectFit: "contain",
-                            backgroundColor: passthroughMode ? "transparent" : "rgba(0, 0, 0, 0.15)",
-                            border: passthroughMode
+                            backgroundColor: passthroughMode && !regionSelectionActive ? "transparent" : "rgba(0, 0, 0, 0.15)",
+                            border: passthroughMode && !regionSelectionActive
                                 ? "1px solid transparent"
                                 : translationsVisible ? "1px solid #f44336" : "1px solid #ffc107",
                             imageRendering: "pixelated"
@@ -708,9 +903,13 @@ export const TranslatedTextOverlay: VFC<{
                                 }
                             }
 
+                            const selectedOrder = selectedRegionIndices.indexOf(index);
+                            const isSelected = selectedOrder !== -1;
+
                             return (
                                 <div
                                     key={index}
+                                    onClick={regionSelectionActive ? () => onToggleRegionSelection(index) : undefined}
                                     style={{
                                         position: "absolute",
                                         display: 'flex',
@@ -725,7 +924,9 @@ export const TranslatedTextOverlay: VFC<{
                                         minHeight: `${scaled[index].height}px`,
                                         boxSizing: 'border-box',
 
-                                        backgroundColor: passthroughMode
+                                        backgroundColor: isSelected
+                                            ? "rgba(25, 118, 210, 0.92)"
+                                            : passthroughMode
                                             ? `rgba(0, 0, 0, ${textBoxOpacity / 100})`
                                             : "rgba(0, 0, 0, 0.8)",
                                         color: "#FFFFFF",
@@ -741,9 +942,36 @@ export const TranslatedTextOverlay: VFC<{
                                         wordWrap: "break-word",
                                         whiteSpace: "pre-wrap",
 
+                                        cursor: regionSelectionActive ? "crosshair" : "default",
+                                        border: regionSelectionActive
+                                            ? `2px solid ${isSelected ? "#90caf9" : "rgba(255, 255, 255, 0.75)"}`
+                                            : "none",
+                                        boxShadow: isSelected ? "0 0 0 3px rgba(144, 202, 249, 0.45)" : "none",
+                                        zIndex: regionSelectionActive ? 2 : 1,
+
                                         animation: "fadeInTranslation 0.2s ease-out forwards"
                                     }}
                                 >
+                                    {isSelected && (
+                                        <div style={{
+                                            position: 'absolute',
+                                            top: '-12px',
+                                            right: '-12px',
+                                            width: '24px',
+                                            height: '24px',
+                                            borderRadius: '50%',
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            justifyContent: 'center',
+                                            background: '#90caf9',
+                                            color: '#0d2338',
+                                            fontWeight: 700,
+                                            fontSize: '13px',
+                                            boxShadow: '0 2px 6px rgba(0, 0, 0, 0.45)',
+                                        }}>
+                                            {selectedOrder + 1}
+                                        </div>
+                                    )}
                                     <div style={{
                                         width: '100%',
                                         textAlign: alignmentStyles.textAlign,
@@ -789,6 +1017,50 @@ export const TranslatedTextOverlay: VFC<{
                         </div>
                     )}
                 </div>
+            )}
+
+            {regionSelectionActive && (
+                <>
+                    <div style={{
+                        position: 'fixed',
+                        top: '18px',
+                        left: '50%',
+                        transform: 'translateX(-50%)',
+                        zIndex: 7005,
+                        padding: '10px 16px',
+                        borderRadius: '18px',
+                        background: 'rgba(12, 20, 29, 0.92)',
+                        color: '#fff',
+                        fontSize: '15px',
+                        fontWeight: 600,
+                        boxShadow: '0 3px 12px rgba(0, 0, 0, 0.45)',
+                    }}>
+                        {t("Tap one or more translated text boxes")}
+                    </div>
+                    <Focusable style={{
+                        position: 'fixed',
+                        left: '50%',
+                        bottom: '24px',
+                        transform: 'translateX(-50%)',
+                        zIndex: 7005,
+                        display: 'flex',
+                        gap: '10px',
+                        padding: '10px',
+                        borderRadius: '12px',
+                        background: 'rgba(12, 20, 29, 0.92)',
+                        boxShadow: '0 3px 12px rgba(0, 0, 0, 0.45)',
+                    }}>
+                        <DialogButton onClick={onCancelRegionSelection}>
+                            {t("Cancel")}
+                        </DialogButton>
+                        <DialogButton
+                            onClick={onConfirmRegionSelection}
+                            disabled={selectedRegionIndices.length === 0}
+                        >
+                            {t("Confirm")} ({selectedRegionIndices.length})
+                        </DialogButton>
+                    </Focusable>
+                </>
             )}
 
             {/* Loading Indicator - now shown on top of the image when processing */}
@@ -871,7 +1143,10 @@ export const ImageOverlay: VFC<{ state: ImageState, onDismiss: () => void }> = (
     const [translatedTextFontFamily, setTranslatedTextFontFamily] = useState<string>("");
     const [translatedTextFontStyle, setTranslatedTextFontStyle] = useState<FontStyleOption>('normal');
     const [passthroughMode, setPassthroughMode] = useState<boolean>(false);
+    const [passthroughAlwaysOnTop, setPassthroughAlwaysOnTop] = useState<boolean>(false);
     const [textBoxOpacity, setTextBoxOpacity] = useState<number>(80);
+    const [regionSelectionActive, setRegionSelectionActive] = useState<boolean>(false);
+    const [selectedRegionIndices, setSelectedRegionIndices] = useState<number[]>([]);
 
     useEffect(() => {
         logger.debug('ImageOverlay', 'useEffect mounting, registering state listener');
@@ -891,6 +1166,7 @@ export const ImageOverlay: VFC<{ state: ImageState, onDismiss: () => void }> = (
             currentTranslatedTextFontFamily: string,
             currentTranslatedTextFontStyle: FontStyleOption,
             currentPassthroughMode: boolean,
+            currentPassthroughAlwaysOnTop: boolean,
             currentTextBoxOpacity: number
         ) => {
             logger.debug('ImageOverlay', `State changed - visible=${isVisible}, imgData.length=${imgData?.length || 0}, regions=${textRegions?.length || 0}`);
@@ -908,10 +1184,16 @@ export const ImageOverlay: VFC<{ state: ImageState, onDismiss: () => void }> = (
             setTranslatedTextFontFamily(currentTranslatedTextFontFamily);
             setTranslatedTextFontStyle(currentTranslatedTextFontStyle);
             setPassthroughMode(currentPassthroughMode);
+            setPassthroughAlwaysOnTop(currentPassthroughAlwaysOnTop);
             setTextBoxOpacity(currentTextBoxOpacity);
         };
 
         state.onStateChanged(handleStateChanged);
+        const handleRegionSelectionChanged = (active: boolean, selectedIndices: number[]) => {
+            setRegionSelectionActive(active);
+            setSelectedRegionIndices(selectedIndices);
+        };
+        state.onRegionSelectionChanged(handleRegionSelectionChanged);
 
         const suspend_register = SteamClient.User.RegisterForPrepareForSystemSuspendProgress(() => {
             onDismiss();
@@ -919,6 +1201,7 @@ export const ImageOverlay: VFC<{ state: ImageState, onDismiss: () => void }> = (
 
         return () => {
             state.offStateChanged(handleStateChanged);
+            state.offRegionSelectionChanged(handleRegionSelectionChanged);
             suspend_register.unregister();
         };
     }, [state, onDismiss]);
@@ -939,7 +1222,13 @@ export const ImageOverlay: VFC<{ state: ImageState, onDismiss: () => void }> = (
             translatedTextFontFamily={translatedTextFontFamily}
             translatedTextFontStyle={translatedTextFontStyle}
             passthroughMode={passthroughMode}
+            passthroughAlwaysOnTop={passthroughAlwaysOnTop}
             textBoxOpacity={textBoxOpacity}
+            regionSelectionActive={regionSelectionActive}
+            selectedRegionIndices={selectedRegionIndices}
+            onToggleRegionSelection={(index) => state.toggleRegionSelection(index)}
+            onConfirmRegionSelection={() => state.confirmRegionSelection()}
+            onCancelRegionSelection={() => state.cancelRegionSelection()}
         />
     );
 };

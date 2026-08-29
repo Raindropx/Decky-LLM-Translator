@@ -97,9 +97,24 @@ export const TabControls: VFC<TabControlsProps> = ({ inputDiagnostics }) => {
                         layout="below"
                         label={t("Quick Translation Shortcut")}
                         description={t("Select which buttons to hold to start translaton")}
-                        rgOptions={inputModeOptions.map((option) => ({ ...option, label: t(option.label) }))}
+                        rgOptions={inputModeOptions
+                            .filter((option) => option.data !== settings.askAIInputMode)
+                            .map((option) => ({ ...option, label: t(option.label) }))}
                         selectedOption={settings.inputMode}
                         onChange={(option) => updateSetting('inputMode', option.data, 'Input method')}
+                    />
+                </PanelSectionRow>
+
+                <PanelSectionRow>
+                    <DropdownItem
+                        layout="below"
+                        label={t("Ask AI Shortcut")}
+                        description={t("Only works when a translation or OCR result is available. Must be different from the translation shortcut.")}
+                        rgOptions={inputModeOptions
+                            .filter((option) => option.data !== settings.inputMode)
+                            .map((option) => ({ ...option, label: t(option.label) }))}
+                        selectedOption={settings.askAIInputMode}
+                        onChange={(option) => updateSetting('askAIInputMode', option.data, 'Ask AI shortcut')}
                     />
                 </PanelSectionRow>
 
@@ -110,7 +125,7 @@ export const TabControls: VFC<TabControlsProps> = ({ inputDiagnostics }) => {
                         min={0}
                         step={0.1}
                         label={t("Hold Time to Start")}
-                        description={t("Seconds to hold button(s) to translate")}
+                        description={t("Seconds to hold translation or Ask AI shortcut buttons")}
                         showValue={true}
                         valueSuffix="s"
                         onChange={(value) => {
@@ -168,21 +183,33 @@ export const TabControls: VFC<TabControlsProps> = ({ inputDiagnostics }) => {
                 </PanelSectionRow>
 
                 {settings.passthroughMode && (
-                    <PanelSectionRow>
-                        <SliderField
-                            value={settings.textBoxOpacity}
-                            min={0}
-                            max={100}
-                            step={5}
-                            label={t("Text Box Opacity")}
-                            description={t("Adjust the translated text box background without fading the text")}
-                            showValue={true}
-                            valueSuffix="%"
-                            onChange={(value) => {
-                                updateSetting('textBoxOpacity', Math.round(value), 'Text box opacity');
-                            }}
-                        />
-                    </PanelSectionRow>
+                    <>
+                        <PanelSectionRow>
+                            <ToggleField
+                                checked={settings.passthroughAlwaysOnTop}
+                                label={t("Keep Passthrough Overlay on Top")}
+                                description={t("Enable when translating Steam Store, Settings, or other Steam UI. Leave off in games so Steam menus, keyboard, and dialogs can appear above translations.")}
+                                onChange={(value) => {
+                                    updateSetting('passthroughAlwaysOnTop', value, 'Passthrough overlay layer');
+                                }}
+                            />
+                        </PanelSectionRow>
+                        <PanelSectionRow>
+                            <SliderField
+                                value={settings.textBoxOpacity}
+                                min={0}
+                                max={100}
+                                step={5}
+                                label={t("Text Box Opacity")}
+                                description={t("Adjust the translated text box background without fading the text")}
+                                showValue={true}
+                                valueSuffix="%"
+                                onChange={(value) => {
+                                    updateSetting('textBoxOpacity', Math.round(value), 'Text box opacity');
+                                }}
+                            />
+                        </PanelSectionRow>
+                    </>
                 )}
 
                 <PanelSectionRow>
@@ -393,6 +420,11 @@ export const TabControls: VFC<TabControlsProps> = ({ inputDiagnostics }) => {
                                     <div>
                                         <span style={{ color: '#888' }}>{t("Input mode:")}</span>{' '}
                                         {t(getInputModeButtons(inputDiagnostics.inputMode))}
+                                    </div>
+
+                                    <div>
+                                        <span style={{ color: '#888' }}>{t("Ask AI input:")}</span>{' '}
+                                        {t(getInputModeButtons(inputDiagnostics.askAIInputMode))}
                                     </div>
 
                                     <div>

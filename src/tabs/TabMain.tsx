@@ -152,6 +152,21 @@ export const TabMain: VFC<TabMainProps> = ({ logic, overlayVisible, providerStat
                             </ButtonItem>
                         </PanelSectionRow>
 
+                        {overlayVisible && (
+                            <PanelSectionRow>
+                                <ButtonItem
+                                    bottomSeparator="standard"
+                                    layout="below"
+                                    disabled={!selectedEndpoint?.enabled || !logic.canAskAI()}
+                                    onClick={() => logic.openAskAI()}
+                                >
+                                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '7px' }}>
+                                        <BsStars /> {t("Ask AI")}
+                                    </span>
+                                </ButtonItem>
+                            </PanelSectionRow>
+                        )}
+
                         <PanelSectionRow>
                             <ButtonItem
                                 bottomSeparator="standard"
