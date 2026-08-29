@@ -283,6 +283,7 @@ const zhCN: Record<string, string> = {
     'Send': '发送',
     'Asking…': '正在询问…',
     'AI Answer': 'AI 回答',
+    'Thinking process': '思考过程',
     'Ask AI failed': '询问 AI 失败',
     'No answer was returned': 'AI 未返回回答',
     'The translated screen is no longer available': '原翻译画面已失效',

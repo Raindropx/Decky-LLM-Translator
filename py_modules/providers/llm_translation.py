@@ -14,6 +14,7 @@ import math
 import os
 import re
 import subprocess
+from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional
 from urllib.parse import urlparse
 
@@ -70,6 +71,14 @@ class LLMResponseError(ValueError):
     """Raised when a provider returns an unusable translation payload."""
 
 
+@dataclass(frozen=True)
+class LLMChatResponse:
+    """Final assistant content separated from optional model reasoning."""
+
+    content: str
+    reasoning: str = ""
+
+
 def _chat_completions_url(base_url: str) -> str:
     value = (base_url or "").strip().rstrip("/")
     parsed = urlparse(value)
@@ -88,13 +97,74 @@ def _strip_code_fence(raw: str) -> str:
     return match.group(1).strip() if match else value
 
 
+_REASONING_TAG_PATTERN = re.compile(
+    r"<(think|reasoning)\b[^>]*>(.*?)</\1\s*>",
+    re.DOTALL | re.IGNORECASE,
+)
+
+
+def _split_embedded_reasoning(raw: str) -> LLMChatResponse:
+    """Remove tagged reasoning from final content while retaining it for Ask AI."""
+    reasoning_parts: List[str] = []
+
+    def replace(match: re.Match) -> str:
+        reasoning = match.group(2).strip()
+        if reasoning:
+            reasoning_parts.append(reasoning)
+        return ""
+
+    content = _REASONING_TAG_PATTERN.sub(replace, raw or "").strip()
+    return LLMChatResponse(content=content, reasoning="\n\n".join(reasoning_parts))
+
+
+def _reasoning_text(message: dict) -> str:
+    """Read common OpenAI-compatible reasoning fields without exposing metadata."""
+    for key in ("reasoning_content", "reasoning"):
+        value = message.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+
+    parts: List[str] = []
+    details = message.get("reasoning_details")
+    if isinstance(details, list):
+        for detail in details:
+            if not isinstance(detail, dict):
+                continue
+            value = detail.get("text")
+            if isinstance(value, str) and value.strip() and value.strip() not in parts:
+                parts.append(value.strip())
+    return "\n\n".join(parts)
+
+
+def _find_final_translation_object(raw: str, valid_ids: set) -> Optional[dict]:
+    """Find the last JSON object containing a request-owned string translation."""
+    decoder = json.JSONDecoder()
+    result = None
+    for index, character in enumerate(raw):
+        if character != "{":
+            continue
+        try:
+            candidate, _ = decoder.raw_decode(raw, index)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(candidate, dict):
+            continue
+        if any(item_id in valid_ids and isinstance(value, str) for item_id, value in candidate.items()):
+            result = candidate
+    return result
+
+
 def parse_translation_json(raw: str, valid_ids: Iterable[str]) -> Dict[str, str]:
     """Parse and constrain an LLM response to request-owned IDs."""
     valid = set(valid_ids)
+    content = _split_embedded_reasoning(raw).content
+    normalized = _strip_code_fence(content)
     try:
-        payload = json.loads(_strip_code_fence(raw))
-    except (TypeError, json.JSONDecodeError) as exc:
-        raise LLMResponseError("LLM returned invalid JSON") from exc
+        payload = json.loads(normalized)
+    except (TypeError, json.JSONDecodeError):
+        payload = _find_final_translation_object(normalized, valid)
+        if payload is None:
+            raise LLMResponseError("LLM returned invalid JSON")
 
     if not isinstance(payload, dict):
         raise LLMResponseError("LLM response must be a JSON object")
@@ -369,9 +439,9 @@ class OpenAICompatibleLLMProvider:
             "temperature": float(self._endpoint.get("temperature", 0.2)),
             "max_tokens": int(self._endpoint.get("maxTokens", 2048)),
         }
-        raw_content = self._post_chat_content(payload)
+        chat_response = self._post_chat_response(payload)
 
-        translations = parse_translation_json(raw_content, [item["id"] for item in items])
+        translations = parse_translation_json(chat_response.content, [item["id"] for item in items])
         missing = len(items) - len(translations)
         if missing:
             logger.warning("LLM response omitted %d/%d OCR items", missing, len(items))
@@ -382,11 +452,11 @@ class OpenAICompatibleLLMProvider:
         screen_regions: List[dict],
         question_parts: List[dict],
         screenshot_bytes: Optional[bytes] = None,
-    ) -> str:
+    ) -> dict:
         request_data = build_ask_request(screen_regions, question_parts)
         return await asyncio.to_thread(self._ask_sync, request_data, screenshot_bytes)
 
-    def _ask_sync(self, request_data: dict, screenshot_bytes: Optional[bytes]) -> str:
+    def _ask_sync(self, request_data: dict, screenshot_bytes: Optional[bytes]) -> dict:
         user_text = json.dumps(
             request_data,
             ensure_ascii=False,
@@ -426,14 +496,18 @@ class OpenAICompatibleLLMProvider:
             "temperature": float(self._endpoint.get("temperature", 0.2)),
             "max_tokens": int(self._endpoint.get("maxTokens", 2048)),
         }
-        answer = self._post_chat_content(payload).strip()
+        chat_response = self._post_chat_response(payload)
+        answer = chat_response.content.strip()
         if not answer:
             raise LLMResponseError("LLM returned an empty answer")
         if len(answer) > MAX_ASK_ANSWER_CHARS:
             raise LLMResponseError("LLM answer was too large")
-        return answer
+        return {
+            "answer": answer,
+            "reasoning": chat_response.reasoning[:MAX_ASK_ANSWER_CHARS],
+        }
 
-    def _post_chat_content(self, payload: dict) -> str:
+    def _post_chat_response(self, payload: dict) -> LLMChatResponse:
         try:
             import requests
         except ImportError as exc:
@@ -480,9 +554,16 @@ class OpenAICompatibleLLMProvider:
 
         try:
             response_payload = json.loads(body.decode("utf-8"))
-            raw_content = response_payload["choices"][0]["message"]["content"]
+            message = response_payload["choices"][0]["message"]
+            raw_content = message["content"]
         except (UnicodeDecodeError, json.JSONDecodeError, KeyError, IndexError, TypeError) as exc:
             raise LLMResponseError("LLM endpoint returned an unsupported response") from exc
         if not isinstance(raw_content, str):
             raise LLMResponseError("LLM endpoint returned unsupported message content")
-        return raw_content
+
+        embedded = _split_embedded_reasoning(raw_content)
+        reasoning_parts = [part for part in (_reasoning_text(message), embedded.reasoning) if part]
+        return LLMChatResponse(
+            content=embedded.content,
+            reasoning="\n\n".join(dict.fromkeys(reasoning_parts)),
+        )

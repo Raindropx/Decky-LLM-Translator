@@ -34,6 +34,7 @@ const strings = {
     'Send': 'o pana',
     'Asking…': 'ilo li alasa sona…',
     'AI Answer': 'toki tan sona ilo',
+    'Thinking process': 'nasin pi alasa sona',
     'Ask AI failed': 'toki tawa sona ilo li pakala',
     'No answer was returned': 'sona ilo li pana ala e toki',
     'The translated screen is no longer available': 'sitelen toki ante li lon ala',

@@ -2786,7 +2786,7 @@ class Plugin:
                 except (ValueError, base64.binascii.Error) as exc:
                     raise LLMConfigurationError("Vision Ask AI screenshot is invalid") from exc
             start_time = time.time()
-            answer = await provider.ask(
+            response = await provider.ask(
                 screen_regions,
                 question_parts,
                 screenshot_bytes=screenshot_bytes,
@@ -2796,7 +2796,7 @@ class Plugin:
                 time.time() - start_time,
                 endpoint_id,
             )
-            return {"answer": answer}
+            return response
         except NetworkError as e:
             logger.error(f"Network error during Ask AI: {e}")
             return {"error": "network_error", "message": str(e)}

@@ -282,6 +282,7 @@ const strings = [
     "測試進前，請先設定 Google Cloud OCR API key。",
     "舊版 Gemini Vision 愛 Gemini API key",
     "LLM endpoint 猶未設定",
+    "思考過程",
 ] as const;
 
 export default strings;

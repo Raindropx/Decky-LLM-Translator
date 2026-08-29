@@ -283,6 +283,7 @@ const keys = [
     "Configure the Google Cloud OCR API key before testing.",
     "Gemini API key required for Legacy Gemini Vision",
     "LLM endpoint is not configured",
+    "Thinking process",
 ] as const;
 
 export default keys;

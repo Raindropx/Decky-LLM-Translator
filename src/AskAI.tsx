@@ -45,6 +45,7 @@ interface SteamUIStoreLike {
 
 interface AskAIResponse {
     answer?: string;
+    reasoning?: string;
     error?: string;
     message?: string;
 }
@@ -58,6 +59,8 @@ interface AskAISession {
     composer: AskAIComposerState;
     status: AskAIStatus;
     answer: string;
+    reasoning: string;
+    reasoningExpanded: boolean;
     error: string;
 }
 
@@ -111,6 +114,8 @@ export class AskAIController {
                 composer: new AskAIComposerState(),
                 status: 'editing',
                 answer: '',
+                reasoning: '',
+                reasoningExpanded: false,
                 error: '',
             };
         }
@@ -153,7 +158,16 @@ export class AskAIController {
         session.composer.reset();
         session.status = 'editing';
         session.answer = '';
+        session.reasoning = '';
+        session.reasoningExpanded = false;
         session.error = '';
+        this.notify();
+    }
+
+    toggleReasoning(): void {
+        const session = this.session;
+        if (!session?.reasoning) return;
+        session.reasoningExpanded = !session.reasoningExpanded;
         this.notify();
     }
 
@@ -181,6 +195,9 @@ export class AskAIController {
         }
 
         session.status = 'sending';
+        session.answer = '';
+        session.reasoning = '';
+        session.reasoningExpanded = false;
         session.error = '';
         const requestGeneration = ++this.requestGeneration;
         const sessionId = session.id;
@@ -202,6 +219,8 @@ export class AskAIController {
                 throw new Error(response?.message || response?.error || t('No answer was returned'));
             }
             session.answer = response.answer;
+            session.reasoning = response.reasoning?.trim() || '';
+            session.reasoningExpanded = false;
             session.status = 'answered';
         } catch (error) {
             if (!this.isCurrentRequest(sessionId, requestGeneration)) return;
@@ -421,6 +440,56 @@ const MarkdownAnswer: VFC<{ answer: string }> = ({ answer }) => (
     </div>
 );
 
+const ReasoningPanel: VFC<{
+    reasoning: string;
+    expanded: boolean;
+    onToggle: () => void;
+}> = ({ reasoning, expanded, onToggle }) => (
+    <div style={{
+        marginTop: '14px',
+        width: '100%',
+        maxWidth: '100%',
+        minWidth: 0,
+        boxSizing: 'border-box',
+        border: '1px solid rgba(255, 255, 255, 0.14)',
+        borderRadius: '8px',
+        background: 'rgba(255, 255, 255, 0.035)',
+        overflow: 'hidden',
+    }}>
+        <DialogButton
+            onClick={onToggle}
+            aria-expanded={expanded}
+            style={{
+                width: '100%',
+                minWidth: 0,
+                padding: '9px 12px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'flex-start',
+                gap: '8px',
+                borderRadius: 0,
+                background: 'transparent',
+            }}
+        >
+            <span aria-hidden='true'>{expanded ? '▾' : '▸'}</span>
+            <span>{t('Thinking process')}</span>
+        </DialogButton>
+        {expanded && (
+            <div style={{
+                padding: '10px 14px 13px',
+                borderTop: '1px solid rgba(255, 255, 255, 0.10)',
+                opacity: 0.78,
+                fontSize: '13px',
+                lineHeight: 1.5,
+                whiteSpace: 'pre-wrap',
+                overflowWrap: 'anywhere',
+            }}>
+                {reasoning}
+            </div>
+        )}
+    </div>
+);
+
 const AskAIModal: VFC<{ controller: AskAIController }> = ({ controller }) => {
     const [, setVersion] = useState(0);
     useEffect(() => controller.subscribe(() => setVersion(value => value + 1)), [controller]);
@@ -556,6 +625,13 @@ const AskAIModal: VFC<{ controller: AskAIController }> = ({ controller }) => {
 
                     {session.error && (
                         <div style={{ color: '#ff8a80', marginTop: '12px' }}>{session.error}</div>
+                    )}
+                    {session.reasoning && (
+                        <ReasoningPanel
+                            reasoning={session.reasoning}
+                            expanded={session.reasoningExpanded}
+                            onToggle={() => controller.toggleReasoning()}
+                        />
                     )}
                     {session.answer && (
                         <>
