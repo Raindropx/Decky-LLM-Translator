@@ -52,6 +52,7 @@ interface AskAIResponse {
 interface AskAISession {
     id: number;
     revision: number;
+    screenshotData: string;
     screenRegions: AskAIScreenRegion[];
     displayRegionContextIndices: number[];
     composer: AskAIComposerState;
@@ -64,14 +65,16 @@ type AskAIListener = () => void;
 
 export class AskAIController {
     private readonly imageState: ImageState;
+    private readonly isVisionEnabled: () => boolean;
     private session: AskAISession | null = null;
     private modal: ShowModalResult | null = null;
     private listeners: AskAIListener[] = [];
     private nextSessionId = 1;
     private requestGeneration = 0;
 
-    constructor(imageState: ImageState) {
+    constructor(imageState: ImageState, isVisionEnabled: () => boolean = () => false) {
         this.imageState = imageState;
+        this.isVisionEnabled = isVisionEnabled;
     }
 
     canOpen(): boolean {
@@ -97,10 +100,12 @@ export class AskAIController {
             this.session = {
                 id: this.nextSessionId++,
                 revision: snapshot.revision,
+                screenshotData: snapshot.imageData,
                 screenRegions: snapshot.contextRegions.map((region, index) => ({
                     id: `region-${index + 1}`,
                     originalText: region.text,
                     translatedText: region.translatedText || region.text,
+                    rect: { ...region.rect },
                 })),
                 displayRegionContextIndices: snapshot.displayRegionContextIndices,
                 composer: new AskAIComposerState(),
@@ -183,12 +188,13 @@ export class AskAIController {
 
         try {
             const response = await call<
-                [AskAIScreenRegion[], AskAIRequestPart[]],
+                [AskAIScreenRegion[], AskAIRequestPart[], string | null],
                 AskAIResponse
             >(
                 'ask_ai',
                 session.screenRegions,
                 session.composer.toRequestParts(),
+                this.isVisionEnabled() ? session.screenshotData : null,
             );
             if (!this.isCurrentRequest(sessionId, requestGeneration)) return;
 

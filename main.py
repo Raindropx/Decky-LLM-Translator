@@ -2755,7 +2755,7 @@ class Plugin:
             logger.error(traceback.format_exc())
             return None
 
-    async def ask_ai(self, screen_regions, question_parts):
+    async def ask_ai(self, screen_regions, question_parts, screenshot_data=None):
         try:
             endpoint = next(
                 (
@@ -2774,8 +2774,23 @@ class Plugin:
             endpoint_id = endpoint["id"]
             api_key = self._llm_endpoint_secrets.get(endpoint_id, "")
             provider = OpenAICompatibleLLMProvider(endpoint, api_key)
+            screenshot_bytes = None
+            if endpoint.get("visionEnabled"):
+                encoded = str(screenshot_data or "")
+                if encoded.startswith("data:"):
+                    encoded = encoded.split(",", 1)[-1]
+                if not encoded or len(encoded) > 16 * 1024 * 1024:
+                    raise LLMConfigurationError("Vision Ask AI screenshot is missing or too large")
+                try:
+                    screenshot_bytes = base64.b64decode(encoded, validate=True)
+                except (ValueError, base64.binascii.Error) as exc:
+                    raise LLMConfigurationError("Vision Ask AI screenshot is invalid") from exc
             start_time = time.time()
-            answer = await provider.ask(screen_regions, question_parts)
+            answer = await provider.ask(
+                screen_regions,
+                question_parts,
+                screenshot_bytes=screenshot_bytes,
+            )
             logger.info(
                 "Ask AI completed in %.2fs using endpoint %s",
                 time.time() - start_time,

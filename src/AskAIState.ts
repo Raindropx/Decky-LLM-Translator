@@ -4,6 +4,12 @@ export interface AskAIScreenRegion {
     id: string;
     originalText: string;
     translatedText: string;
+    rect: {
+        left: number;
+        top: number;
+        right: number;
+        bottom: number;
+    };
 }
 
 export interface AskAITextPart {

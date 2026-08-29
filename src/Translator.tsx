@@ -93,6 +93,7 @@ export class GameTranslatorLogic {
     private hasGoogleApiKey: boolean = false;
     private hasGeminiApiKey: boolean = false;
     private hasSelectedLLMEndpoint: boolean = false;
+    private selectedLLMVisionEnabled = false;
 
     isOverlayVisible(): boolean {
         return this.imageState.isVisible();
@@ -105,7 +106,7 @@ export class GameTranslatorLogic {
 
     constructor(imageState: ImageState) {
         this.imageState = imageState;
-        this.askAI = new AskAIController(imageState);
+        this.askAI = new AskAIController(imageState, () => this.selectedLLMVisionEnabled);
         this.textRecognizer = new TextRecognizer();
         this.textTranslator = new TextTranslator();
 
@@ -960,6 +961,7 @@ export class GameTranslatorLogic {
     setLlmEndpoints = (endpoints: LLMEndpoint[], selectedId: string): void => {
         const active = endpoints.find(endpoint => endpoint.id === selectedId);
         this.setHasSelectedLLMEndpoint(!!active && active.enabled);
+        this.selectedLLMVisionEnabled = Boolean(active?.enabled && active.visionEnabled);
         this.setLlmEndpointCacheKey(active ? JSON.stringify([
             active.id,
             active.provider,

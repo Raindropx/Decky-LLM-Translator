@@ -29,6 +29,7 @@ export interface ScreenshotOverlaySnapshot {
 
 export interface AskAIOverlaySnapshot {
     revision: number;
+    imageData: string;
     regions: TranslatedRegion[];
     contextRegions: TranslatedRegion[];
     displayRegionContextIndices: number[];
@@ -281,6 +282,7 @@ export class ImageState {
 
         return {
             revision: this.overlayRevision,
+            imageData: this.imageData,
             regions: this.cloneTranslatedRegions(),
             contextRegions: this.askAIContextRegions.map(region => this.cloneTranslatedRegion(region)),
             displayRegionContextIndices: [...this.displayRegionContextIndices],

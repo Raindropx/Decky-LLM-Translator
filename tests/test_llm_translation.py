@@ -1,5 +1,6 @@
 import io
 import importlib.util
+import json
 from pathlib import Path
 import sys
 import types
@@ -29,6 +30,7 @@ from decky_llm_test_providers.llm_translation import (
     ASK_AI_SYSTEM_PROMPT,
     LLMConfigurationError,
     LLMResponseError,
+    OpenAICompatibleLLMProvider,
     SYSTEM_PROMPT,
     _annotate_screenshot,
     _annotate_screenshot_with_bundled_python,
@@ -129,6 +131,123 @@ class LLMTranslationTests(unittest.TestCase):
                 [{"id": "region-1", "originalText": "Save", "translatedText": "保存"}],
                 [{"type": "reference", "regionId": "region-1"}],
             )
+
+    def test_ask_request_canonicalizes_region_bounds(self):
+        request = build_ask_request(
+            [{
+                "id": "region-1",
+                "originalText": "Start",
+                "translatedText": "开始",
+                "rect": {"left": 10.2, "top": 20, "right": 210.7, "bottom": 80},
+            }],
+            [{"type": "text", "text": "这个按钮在哪？"}],
+        )
+
+        self.assertEqual(
+            request["screenContext"][0]["rect"],
+            {"left": 10, "top": 20, "right": 211, "bottom": 80},
+        )
+
+    def test_vision_ask_sends_annotated_screenshot_and_text_context(self):
+        provider = OpenAICompatibleLLMProvider(
+            {
+                "baseUrl": "https://example.test/v1",
+                "model": "vision-model",
+                "visionEnabled": True,
+            },
+            "secret",
+        )
+        request = build_ask_request(
+            [{
+                "id": "region-1",
+                "originalText": "Start",
+                "translatedText": "开始",
+                "rect": {"left": 10, "top": 20, "right": 210, "bottom": 80},
+            }],
+            [{"type": "text", "text": "解释这个按钮"}],
+        )
+
+        with mock.patch(
+            f"{TEST_PACKAGE}.llm_translation._annotate_screenshot",
+            return_value=b"annotated-jpeg",
+        ) as annotate:
+            with mock.patch.object(
+                provider,
+                "_post_chat_content",
+                return_value="这是开始按钮。",
+            ) as post:
+                answer = provider._ask_sync(request, b"clean-original-png")
+
+        self.assertEqual(answer, "这是开始按钮。")
+        annotate.assert_called_once_with(
+            b"clean-original-png",
+            [{
+                "id": "region-1",
+                "rect": {"left": 10, "top": 20, "right": 210, "bottom": 80},
+            }],
+        )
+        user_content = post.call_args.args[0]["messages"][1]["content"]
+        self.assertIsInstance(user_content, list)
+        text_context = json.loads(user_content[0]["text"])
+        self.assertEqual(text_context["screenContext"][0]["originalText"], "Start")
+        self.assertEqual(text_context["screenContext"][0]["translatedText"], "开始")
+        self.assertTrue(user_content[1]["image_url"]["url"].startswith("data:image/jpeg;base64,"))
+
+    def test_text_only_ask_does_not_annotate_or_attach_screenshot(self):
+        provider = OpenAICompatibleLLMProvider(
+            {
+                "baseUrl": "https://example.test/v1",
+                "model": "text-model",
+                "visionEnabled": False,
+            },
+            "",
+        )
+        request = build_ask_request(
+            [{
+                "id": "region-1",
+                "originalText": "Start",
+                "translatedText": "开始",
+            }],
+            [{"type": "text", "text": "这是什么意思？"}],
+        )
+
+        with mock.patch(
+            f"{TEST_PACKAGE}.llm_translation._annotate_screenshot",
+        ) as annotate:
+            with mock.patch.object(
+                provider,
+                "_post_chat_content",
+                return_value="表示开始。",
+            ) as post:
+                answer = provider._ask_sync(request, None)
+
+        self.assertEqual(answer, "表示开始。")
+        annotate.assert_not_called()
+        user_content = post.call_args.args[0]["messages"][1]["content"]
+        self.assertIsInstance(user_content, str)
+        self.assertEqual(json.loads(user_content)["screenContext"][0]["originalText"], "Start")
+
+    def test_vision_ask_rejects_missing_screenshot(self):
+        provider = OpenAICompatibleLLMProvider(
+            {
+                "baseUrl": "https://example.test/v1",
+                "model": "vision-model",
+                "visionEnabled": True,
+            },
+            "",
+        )
+        request = build_ask_request(
+            [{
+                "id": "region-1",
+                "originalText": "Start",
+                "translatedText": "开始",
+                "rect": {"left": 10, "top": 20, "right": 210, "bottom": 80},
+            }],
+            [{"type": "text", "text": "解释"}],
+        )
+
+        with self.assertRaisesRegex(LLMConfigurationError, "original screenshot"):
+            provider._ask_sync(request, None)
 
     def test_ocr_items_make_noise_and_confidence_explicit(self):
         self.assertEqual(
