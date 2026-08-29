@@ -16,10 +16,10 @@ importers:
         version: 4.12.0(react@19.2.3)
       react-markdown:
         specifier: 8.0.7
-        version: 8.0.7(@types/react@16.14.0)(react@19.2.3)
+        version: 8.0.7(@types/react@16.14.0)(react@19.2.3)(supports-color@8.1.1)
       remark-gfm:
         specifier: 3.0.1
-        version: 3.0.1
+        version: 3.0.1(supports-color@8.1.1)
     devDependencies:
       '@decky/api':
         specifier: ^1.1.3
@@ -30,6 +30,9 @@ importers:
       '@decky/ui':
         specifier: ^4.11.1
         version: 4.11.1
+      '@rollup/plugin-sucrase':
+        specifier: 5.1.0
+        version: 5.1.0(rollup@4.55.3)
       '@types/react':
         specifier: 16.14.0
         version: 16.14.0
@@ -135,6 +138,15 @@ packages:
       rollup:
         optional: true
 
+  '@rollup/plugin-sucrase@5.1.0':
+    resolution: {integrity: sha512-/S4cJnfnjmaH0RqjvZtKOCx8WRnL14f3+tIieL5Ty0YkRpUPW2S/tgHCplWsHEmuZAWYoPJ4KN5eIxWtQw95Qw==}
+    engines: {node: '>=14.0.0'}
+    peerDependencies:
+      rollup: ^2.53.1||^3.0.0||^4.0.0
+    peerDependenciesMeta:
+      rollup:
+        optional: true
+
   '@rollup/plugin-typescript@11.1.6':
     resolution: {integrity: sha512-R92yOmIACgYdJ7dJ97p4K69I8gg6IEHt8M7dUBxN3W6nrO8uUxX5ixl0yU/N3aZTi8WhPuICvOHXQvF6FaykAA==}
     engines: {node: '>=14.0.0'}
@@ -191,66 +203,79 @@ packages:
     resolution: {integrity: sha512-YeGUhkN1oA+iSPzzhEjVPS29YbViOr8s4lSsFaZKLHswgqP911xx25fPOyE9+khmN6W4VeM0aevbDp4kkEoHiA==}
     cpu: [arm]
     os: [linux]
+    libc: [glibc]
 
   '@rollup/rollup-linux-arm-musleabihf@4.55.3':
     resolution: {integrity: sha512-eo0iOIOvcAlWB3Z3eh8pVM8hZ0oVkK3AjEM9nSrkSug2l15qHzF3TOwT0747omI6+CJJvl7drwZepT+re6Fy/w==}
     cpu: [arm]
     os: [linux]
+    libc: [musl]
 
   '@rollup/rollup-linux-arm64-gnu@4.55.3':
     resolution: {integrity: sha512-DJay3ep76bKUDImmn//W5SvpjRN5LmK/ntWyeJs/dcnwiiHESd3N4uteK9FDLf0S0W8E6Y0sVRXpOCoQclQqNg==}
     cpu: [arm64]
     os: [linux]
+    libc: [glibc]
 
   '@rollup/rollup-linux-arm64-musl@4.55.3':
     resolution: {integrity: sha512-BKKWQkY2WgJ5MC/ayvIJTHjy0JUGb5efaHCUiG/39sSUvAYRBaO3+/EK0AZT1RF3pSj86O24GLLik9mAYu0IJg==}
     cpu: [arm64]
     os: [linux]
+    libc: [musl]
 
   '@rollup/rollup-linux-loong64-gnu@4.55.3':
     resolution: {integrity: sha512-Q9nVlWtKAG7ISW80OiZGxTr6rYtyDSkauHUtvkQI6TNOJjFvpj4gcH+KaJihqYInnAzEEUetPQubRwHef4exVg==}
     cpu: [loong64]
     os: [linux]
+    libc: [glibc]
 
   '@rollup/rollup-linux-loong64-musl@4.55.3':
     resolution: {integrity: sha512-2H5LmhzrpC4fFRNwknzmmTvvyJPHwESoJgyReXeFoYYuIDfBhP29TEXOkCJE/KxHi27mj7wDUClNq78ue3QEBQ==}
     cpu: [loong64]
     os: [linux]
+    libc: [musl]
 
   '@rollup/rollup-linux-ppc64-gnu@4.55.3':
     resolution: {integrity: sha512-9S542V0ie9LCTznPYlvaeySwBeIEa7rDBgLHKZ5S9DBgcqdJYburabm8TqiqG6mrdTzfV5uttQRHcbKff9lWtA==}
     cpu: [ppc64]
     os: [linux]
+    libc: [glibc]
 
   '@rollup/rollup-linux-ppc64-musl@4.55.3':
     resolution: {integrity: sha512-ukxw+YH3XXpcezLgbJeasgxyTbdpnNAkrIlFGDl7t+pgCxZ89/6n1a+MxlY7CegU+nDgrgdqDelPRNQ/47zs0g==}
     cpu: [ppc64]
     os: [linux]
+    libc: [musl]
 
   '@rollup/rollup-linux-riscv64-gnu@4.55.3':
     resolution: {integrity: sha512-Iauw9UsTTvlF++FhghFJjqYxyXdggXsOqGpFBylaRopVpcbfyIIsNvkf9oGwfgIcf57z3m8+/oSYTo6HutBFNw==}
     cpu: [riscv64]
     os: [linux]
+    libc: [glibc]
 
   '@rollup/rollup-linux-riscv64-musl@4.55.3':
     resolution: {integrity: sha512-3OqKAHSEQXKdq9mQ4eajqUgNIK27VZPW3I26EP8miIzuKzCJ3aW3oEn2pzF+4/Hj/Moc0YDsOtBgT5bZ56/vcA==}
     cpu: [riscv64]
     os: [linux]
+    libc: [musl]
 
   '@rollup/rollup-linux-s390x-gnu@4.55.3':
     resolution: {integrity: sha512-0CM8dSVzVIaqMcXIFej8zZrSFLnGrAE8qlNbbHfTw1EEPnFTg1U1ekI0JdzjPyzSfUsHWtodilQQG/RA55berA==}
     cpu: [s390x]
     os: [linux]
+    libc: [glibc]
 
   '@rollup/rollup-linux-x64-gnu@4.55.3':
     resolution: {integrity: sha512-+fgJE12FZMIgBaKIAGd45rxf+5ftcycANJRWk8Vz0NnMTM5rADPGuRFTYar+Mqs560xuART7XsX2lSACa1iOmQ==}
     cpu: [x64]
     os: [linux]
+    libc: [glibc]
 
   '@rollup/rollup-linux-x64-musl@4.55.3':
     resolution: {integrity: sha512-tMD7NnbAolWPzQlJQJjVFh/fNH3K/KnA7K8gv2dJWCwwnaK6DFCYST1QXYWfu5V0cDwarWC8Sf/cfMHniNq21A==}
     cpu: [x64]
     os: [linux]
+    libc: [musl]
 
   '@rollup/rollup-openbsd-x64@4.55.3':
     resolution: {integrity: sha512-u5KsqxOxjEeIbn7bUK1MPM34jrnPwjeqgyin4/N6e/KzXKfpE9Mi0nCxcQjaM9lLmPcHmn/xx1yOjgTMtu1jWQ==}
@@ -427,6 +452,9 @@ packages:
     resolution: {integrity: sha512-4Dj6M28JB+oAH8kFkTLUo+a2jwOFkuqb3yucU0CANcRRUbxS0cP0nZYCGjcc3BNXwRIsUVmDGgzawme7zvJHvg==}
     engines: {node: '>=12'}
 
+  any-promise@1.3.0:
+    resolution: {integrity: sha512-7UvmKalWRt1wgjL1RrGxoSJW/0QZFIegpeGvZG9kjp8vrRu55XTHbwnqq2GpXm9uLbcuhxm3IqX9OB4MZR1b2A==}
+
   array-union@2.1.0:
     resolution: {integrity: sha512-HGyxoOTYUyCM6stUe6EJgnd4EoewAI7zMdfqO+kGjnlZmBDz/cR5pf8r/cR4Wq60sL/p0IkcjUEEPwS3GFrIyw==}
     engines: {node: '>=8'}
@@ -488,6 +516,10 @@ packages:
 
   commander@2.20.3:
     resolution: {integrity: sha512-GpVkmM8vF2vQUkj2LvZmD35JxeJOLCwJ9cUkugyk2nuhbv3+mJvpLYYt+0+USMxE+oj+ey/lJEnhZw75x/OMcQ==}
+
+  commander@4.1.1:
+    resolution: {integrity: sha512-NOKm8xhkzAjzFx8B2v5OAHT+u5pRQc2UCa2Vq9jYL/31o2wi9mxBA7LIFs3sV5VSC49z6pEhfbMULvShKj26WA==}
+    engines: {node: '>= 6'}
 
   commondir@1.0.1:
     resolution: {integrity: sha512-W9pAhw0ja1Edb5GVdIF1mjZw/ASI0AlShXM83UUGe2DVr5TdAPEA1OA8m/g8zWp9x6On7gqufY+FatDbC3MDQg==}
@@ -605,6 +637,15 @@ packages:
 
   fastq@1.20.1:
     resolution: {integrity: sha512-GGToxJ/w1x32s/D2EKND7kTil4n8OVk/9mycTc4VDza13lOvpUZTGX3mFSCtV9ksdGBVzvsyAVLM6mHFThxXxw==}
+
+  fdir@6.5.0:
+    resolution: {integrity: sha512-tIbYtZbucOs0BRGqPJkshJUYdL+SDH7dVM8gjy+ERp3WAUjLEFJE+02kanyHtwjWOnwrKYBiwAmM0p4kLJAnXg==}
+    engines: {node: '>=12.0.0'}
+    peerDependencies:
+      picomatch: ^3 || ^4
+    peerDependenciesMeta:
+      picomatch:
+        optional: true
 
   fill-range@7.1.1:
     resolution: {integrity: sha512-YsGpe3WHLK8ZYi4tWDg2Jy3ebRz2rXowDxnld4bkQB00cc/1Zw9AWnC0i9ztDJitivtQvaI9KaLyKrc+hBW0yg==}
@@ -752,6 +793,9 @@ packages:
   kleur@4.1.5:
     resolution: {integrity: sha512-o+NO+8WrRiQEE4/7nwRJhN1HWpVmJm511pBHUxPLtp0BUISzlBplORYSmTclCnJvQq2tKu/sgl3xVpkc7ZWuQQ==}
     engines: {node: '>=6'}
+
+  lines-and-columns@1.2.4:
+    resolution: {integrity: sha512-7ylylesZQ/PV29jhEDl3Ufjo6ZX7gCqJr5F7PKrqc93v7fzSymt1BpwEU8nAUXs8qzzvqhbjhK5QZg6Mt/HkBg==}
 
   loader-runner@4.3.1:
     resolution: {integrity: sha512-IWqP2SCPhyVFTBtRcgMHdzlf9ul25NwaFx4wCEH/KjAXuuHY4yNjvPXsBokp8jCB936PyWRaPKUNh8NvylLp2Q==}
@@ -940,6 +984,9 @@ packages:
   ms@2.1.3:
     resolution: {integrity: sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tz7R9xAOtHnSO/tXtF3WRTlA==}
 
+  mz@2.7.0:
+    resolution: {integrity: sha512-z81GNO7nnYMEhrGh9LeymoE4+Yr0Wn5McHIZMK5cfQCl+NDX08sCZgUc9/6MHni9IWuFLm1Z3HTCXu2z9fN62Q==}
+
   neo-async@2.6.2:
     resolution: {integrity: sha512-Yd3UES5mWCSqR+qNT93S3UoYUkqAZ9lLg8a7g9rimsWmYGK8cVToA4/sF3RrshdyV3sAGMXVUmpMYOw+dLpOuw==}
 
@@ -989,6 +1036,14 @@ packages:
   picomatch@4.0.3:
     resolution: {integrity: sha512-5gTmgEY/sqK6gFXLIsQNH19lWb4ebPDLA4SdLP7dsWkIXHWlG66oPuVvXSGFPppYZz8ZDZq0dYYrbHfBCVUb1Q==}
     engines: {node: '>=12'}
+
+  picomatch@4.0.7:
+    resolution: {integrity: sha512-qcJu88Q2IWqJsDD529JKMdwGm/dvInW4HvQnRwiH9JtihJvzGOscDtHE3x1pBKeUOTysQ8kVmLnJ2kJu7yhcGA==}
+    engines: {node: '>=12'}
+
+  pirates@4.0.7:
+    resolution: {integrity: sha512-TfySrs/5nm8fQJDcBDuUng3VOUKsd7S+zqvbOTiGXHfxX4wK31ard+hoNuvkicM/2YFzlpDgABOevKSsB4G/FA==}
+    engines: {node: '>= 6'}
 
   prop-types@15.8.1:
     resolution: {integrity: sha512-oj87CgZICdulUohogVAR7AjlC0327U4el4L6eAvOqCeudMDVU0NThNaV+b9Df4dXgSP1gXMTnPdhfe/2qDH5cg==}
@@ -1155,6 +1210,11 @@ packages:
   style-to-object@0.4.4:
     resolution: {integrity: sha512-HYNoHZa2GorYNyqiCaBgsxvcJIn7OHq6inEga+E6Ke3m5JkoqpQbnFssk4jwe+K7AhGa2fcha4wSOf1Kn01dMg==}
 
+  sucrase@3.35.1:
+    resolution: {integrity: sha512-DhuTmvZWux4H1UOnWMB3sk0sbaCVOoQZjv8u1rDoTV0HTdGem9hkAZtl4JZy8P2z4Bg0nT+YMeOFyVr4zcG5Tw==}
+    engines: {node: '>=16 || 14 >=14.17'}
+    hasBin: true
+
   supports-color@8.1.1:
     resolution: {integrity: sha512-MpUEN2OodtUzxvKQl72cUF7RQ5EiHsGvSsVG0ia9c5RbWGL2CI4C7EpPS8UTBIplnlzZiNuV56w+FuNxy3ty2Q==}
     engines: {node: '>=10'}
@@ -1188,6 +1248,17 @@ packages:
     engines: {node: '>=10'}
     hasBin: true
 
+  thenify-all@1.6.0:
+    resolution: {integrity: sha512-RNxQH/qI8/t3thXJDwcstUO4zeqo64+Uy/+sNVRBx4Xn2OX+OZ9oP+iJnNFqplFra2ZUVeKCSa2oVWi3T4uVmA==}
+    engines: {node: '>=0.8'}
+
+  thenify@3.3.1:
+    resolution: {integrity: sha512-RVZSIV5IG10Hk3enotrhvz0T9em6cyHBLkH/YAZuKqd8hRkKhSfCGIcP2KUY0EPxndzANBmNllzWPwak+bheSw==}
+
+  tinyglobby@0.2.17:
+    resolution: {integrity: sha512-wXR/dYpcqKmfWpEdZjiKJOwCNFndD0DMnrW/cYjVGttEkBfVgcLFHoNrlj47mjOVic9yyNu65alsgF4NQyTa2g==}
+    engines: {node: '>=12.0.0'}
+
   to-regex-range@5.0.1:
     resolution: {integrity: sha512-65P7iz6X5yEr1cwcgvQxbbIw7Uk3gOy5dIdtZ4rDveLqhrdJP+Li/Hx6tyK0NEb+2GCyneCMJiGqrADCSNk8sQ==}
     engines: {node: '>=8.0'}
@@ -1197,6 +1268,9 @@ packages:
 
   trough@2.2.0:
     resolution: {integrity: sha512-tmMpK00BjZiUyVyvrBK7knerNgmgvcV/KLVyuma/SC+TQN167GrMRciANTz09+k3zW8L8t60jWO1GpfkZdjTaw==}
+
+  ts-interface-checker@0.1.13:
+    resolution: {integrity: sha512-Y/arvbn+rrz3JCKl9C4kVNfTfSm2/mEp5FSz5EsZSANGPSlQrpRI5M4PKF+mJnE52jOO90PnPSc3Ur3bTQw0gA==}
 
   tslib@2.8.1:
     resolution: {integrity: sha512-oJFu94HQb+KVduSUQL7wnpmqnfmLsOA/nAh6b6EH0wCEoK0/mPeXU6c3wKDV83MkOuHPRHtSXKKU99IBazS/2w==}
@@ -1382,6 +1456,13 @@ snapshots:
     dependencies:
       '@rollup/pluginutils': 5.3.0(rollup@4.55.3)
       magic-string: 0.30.21
+    optionalDependencies:
+      rollup: 4.55.3
+
+  '@rollup/plugin-sucrase@5.1.0(rollup@4.55.3)':
+    dependencies:
+      '@rollup/pluginutils': 5.3.0(rollup@4.55.3)
+      sucrase: 3.35.1
     optionalDependencies:
       rollup: 4.55.3
 
@@ -1652,6 +1733,8 @@ snapshots:
 
   ansi-styles@6.2.3: {}
 
+  any-promise@1.3.0: {}
+
   array-union@2.1.0: {}
 
   bail@2.0.2: {}
@@ -1703,6 +1786,8 @@ snapshots:
 
   commander@2.20.3: {}
 
+  commander@4.1.1: {}
+
   commondir@1.0.1: {}
 
   concat-map@0.0.1: {}
@@ -1715,9 +1800,11 @@ snapshots:
 
   csstype@3.2.3: {}
 
-  debug@4.4.3:
+  debug@4.4.3(supports-color@8.1.1):
     dependencies:
       ms: 2.1.3
+    optionalDependencies:
+      supports-color: 8.1.1
 
   decode-named-character-reference@1.3.0:
     dependencies:
@@ -1803,6 +1890,10 @@ snapshots:
   fastq@1.20.1:
     dependencies:
       reusify: 1.1.0
+
+  fdir@6.5.0(picomatch@4.0.7):
+    optionalDependencies:
+      picomatch: 4.0.7
 
   fill-range@7.1.1:
     dependencies:
@@ -1934,6 +2025,8 @@ snapshots:
 
   kleur@4.1.5: {}
 
+  lines-and-columns@1.2.4: {}
+
   loader-runner@4.3.1: {}
 
   longest-streak@3.1.0: {}
@@ -1963,13 +2056,13 @@ snapshots:
       unist-util-is: 5.2.1
       unist-util-visit-parents: 5.1.3
 
-  mdast-util-from-markdown@1.3.1:
+  mdast-util-from-markdown@1.3.1(supports-color@8.1.1):
     dependencies:
       '@types/mdast': 3.0.15
       '@types/unist': 2.0.11
       decode-named-character-reference: 1.3.0
       mdast-util-to-string: 3.2.0
-      micromark: 3.2.0
+      micromark: 3.2.0(supports-color@8.1.1)
       micromark-util-decode-numeric-character-reference: 1.1.0
       micromark-util-decode-string: 1.1.0
       micromark-util-normalize-identifier: 1.1.0
@@ -1998,11 +2091,11 @@ snapshots:
       '@types/mdast': 3.0.15
       mdast-util-to-markdown: 1.5.0
 
-  mdast-util-gfm-table@1.0.7:
+  mdast-util-gfm-table@1.0.7(supports-color@8.1.1):
     dependencies:
       '@types/mdast': 3.0.15
       markdown-table: 3.0.4
-      mdast-util-from-markdown: 1.3.1
+      mdast-util-from-markdown: 1.3.1(supports-color@8.1.1)
       mdast-util-to-markdown: 1.5.0
     transitivePeerDependencies:
       - supports-color
@@ -2012,13 +2105,13 @@ snapshots:
       '@types/mdast': 3.0.15
       mdast-util-to-markdown: 1.5.0
 
-  mdast-util-gfm@2.0.2:
+  mdast-util-gfm@2.0.2(supports-color@8.1.1):
     dependencies:
-      mdast-util-from-markdown: 1.3.1
+      mdast-util-from-markdown: 1.3.1(supports-color@8.1.1)
       mdast-util-gfm-autolink-literal: 1.0.3
       mdast-util-gfm-footnote: 1.0.2
       mdast-util-gfm-strikethrough: 1.0.3
-      mdast-util-gfm-table: 1.0.7
+      mdast-util-gfm-table: 1.0.7(supports-color@8.1.1)
       mdast-util-gfm-task-list-item: 1.0.2
       mdast-util-to-markdown: 1.5.0
     transitivePeerDependencies:
@@ -2232,10 +2325,10 @@ snapshots:
 
   micromark-util-types@1.1.0: {}
 
-  micromark@3.2.0:
+  micromark@3.2.0(supports-color@8.1.1):
     dependencies:
       '@types/debug': 4.1.13
-      debug: 4.4.3
+      debug: 4.4.3(supports-color@8.1.1)
       decode-named-character-reference: 1.3.0
       micromark-core-commonmark: 1.1.0
       micromark-factory-space: 1.1.0
@@ -2281,6 +2374,12 @@ snapshots:
 
   ms@2.1.3: {}
 
+  mz@2.7.0:
+    dependencies:
+      any-promise: 1.3.0
+      object-assign: 4.1.1
+      thenify-all: 1.6.0
+
   neo-async@2.6.2: {}
 
   node-releases@2.0.27: {}
@@ -2316,6 +2415,10 @@ snapshots:
 
   picomatch@4.0.3: {}
 
+  picomatch@4.0.7: {}
+
+  pirates@4.0.7: {}
+
   prop-types@15.8.1:
     dependencies:
       loose-envify: 1.4.0
@@ -2342,7 +2445,7 @@ snapshots:
 
   react-is@18.3.1: {}
 
-  react-markdown@8.0.7(@types/react@16.14.0)(react@19.2.3):
+  react-markdown@8.0.7(@types/react@16.14.0)(react@19.2.3)(supports-color@8.1.1):
     dependencies:
       '@types/hast': 2.3.10
       '@types/prop-types': 15.7.15
@@ -2354,7 +2457,7 @@ snapshots:
       property-information: 6.5.0
       react: 19.2.3
       react-is: 18.3.1
-      remark-parse: 10.0.2
+      remark-parse: 10.0.2(supports-color@8.1.1)
       remark-rehype: 10.1.0
       space-separated-tokens: 2.0.2
       style-to-object: 0.4.4
@@ -2370,19 +2473,19 @@ snapshots:
     dependencies:
       resolve: 1.22.11
 
-  remark-gfm@3.0.1:
+  remark-gfm@3.0.1(supports-color@8.1.1):
     dependencies:
       '@types/mdast': 3.0.15
-      mdast-util-gfm: 2.0.2
+      mdast-util-gfm: 2.0.2(supports-color@8.1.1)
       micromark-extension-gfm: 2.0.3
       unified: 10.1.2
     transitivePeerDependencies:
       - supports-color
 
-  remark-parse@10.0.2:
+  remark-parse@10.0.2(supports-color@8.1.1):
     dependencies:
       '@types/mdast': 3.0.15
-      mdast-util-from-markdown: 1.3.1
+      mdast-util-from-markdown: 1.3.1(supports-color@8.1.1)
       unified: 10.1.2
     transitivePeerDependencies:
       - supports-color
@@ -2537,6 +2640,16 @@ snapshots:
     dependencies:
       inline-style-parser: 0.1.1
 
+  sucrase@3.35.1:
+    dependencies:
+      '@jridgewell/gen-mapping': 0.3.13
+      commander: 4.1.1
+      lines-and-columns: 1.2.4
+      mz: 2.7.0
+      pirates: 4.0.7
+      tinyglobby: 0.2.17
+      ts-interface-checker: 0.1.13
+
   supports-color@8.1.1:
     dependencies:
       has-flag: 4.0.0
@@ -2561,6 +2674,19 @@ snapshots:
       commander: 2.20.3
       source-map-support: 0.5.21
 
+  thenify-all@1.6.0:
+    dependencies:
+      thenify: 3.3.1
+
+  thenify@3.3.1:
+    dependencies:
+      any-promise: 1.3.0
+
+  tinyglobby@0.2.17:
+    dependencies:
+      fdir: 6.5.0(picomatch@4.0.7)
+      picomatch: 4.0.7
+
   to-regex-range@5.0.1:
     dependencies:
       is-number: 7.0.0
@@ -2568,6 +2694,8 @@ snapshots:
   trim-lines@3.0.1: {}
 
   trough@2.2.0: {}
+
+  ts-interface-checker@0.1.13: {}
 
   tslib@2.8.1: {}
 
