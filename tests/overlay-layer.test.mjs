@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
     ACTIVE_OVERLAY_Z_INDEX,
     PASSIVE_PASSTHROUGH_Z_INDEX,
+    clampOverlayControlPosition,
     getTranslationOverlayZIndex,
 } from '../src/OverlayLayer.ts';
 
@@ -34,4 +35,24 @@ test('normal screenshot overlay keeps its existing active layer', () => {
         getTranslationOverlayZIndex(false, false, false),
         ACTIVE_OVERLAY_Z_INDEX,
     );
+});
+
+test('dragged selection controls stay inside the viewport', () => {
+    assert.deepEqual(clampOverlayControlPosition({
+        left: 700,
+        top: 520,
+        viewportWidth: 854,
+        viewportHeight: 534,
+        controlWidth: 350,
+        controlHeight: 60,
+    }), { left: 504, top: 474 });
+
+    assert.deepEqual(clampOverlayControlPosition({
+        left: -30,
+        top: -20,
+        viewportWidth: 854,
+        viewportHeight: 534,
+        controlWidth: 350,
+        controlHeight: 60,
+    }), { left: 0, top: 0 });
 });

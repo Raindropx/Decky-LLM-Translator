@@ -4,12 +4,14 @@ import { DialogButton, findModuleChild, Focusable } from "@decky/ui";
 
 
 import { VFC, useEffect, useState, useRef, useCallback, useMemo } from "react";
+import type { PointerEvent as ReactPointerEvent } from "react";
 import { TranslatedRegion } from "./TextTranslator";
 import { logger } from "./Logger";
 import { buildTranslatedFontFamily, ensureFontLoaded, resolveFontStyleCSS } from "./fonts";
 import type { FontStyleOption } from "./fonts";
 import { t } from "./i18n";
-import { getTranslationOverlayZIndex } from "./OverlayLayer";
+import { clampOverlayControlPosition, getTranslationOverlayZIndex } from "./OverlayLayer";
+import type { OverlayControlPosition } from "./OverlayLayer";
 
 export type HorizontalTextAlignment = 'left' | 'right' | 'center' | 'justify';
 
@@ -647,12 +649,24 @@ export const TranslatedTextOverlay: VFC<{
 
     // Ref to the screenshot image element
     const imgRef = useRef<HTMLImageElement>(null);
+    const selectionControlsRef = useRef<HTMLDivElement>(null);
+    const selectionControlsDragRef = useRef<{
+        pointerId: number;
+        offsetX: number;
+        offsetY: number;
+        controlWidth: number;
+        controlHeight: number;
+    } | null>(null);
+    const selectionControlsDragCleanupRef = useRef<(() => void) | null>(null);
 
     // State to track actual rendered image dimensions
     const [imageDimensions, setImageDimensions] = useState({ width: 0, height: 0 });
 
     // State to track the natural (original) image dimensions from the screenshot
     const [naturalDimensions, setNaturalDimensions] = useState({ width: 1280, height: 800 });
+
+    const [selectionControlsPosition, setSelectionControlsPosition] = useState<OverlayControlPosition | null>(null);
+    const [selectionControlsDragging, setSelectionControlsDragging] = useState(false);
 
     // Load font as a side-effect (network request / DOM injection)
     useEffect(() => {
@@ -702,6 +716,106 @@ export const TranslatedTextOverlay: VFC<{
             window.removeEventListener('resize', updateImageDimensions);
         };
     }, [updateImageDimensions]);
+
+    useEffect(() => {
+        if (!regionSelectionActive) {
+            selectionControlsDragCleanupRef.current?.();
+            selectionControlsDragRef.current = null;
+            setSelectionControlsPosition(null);
+            setSelectionControlsDragging(false);
+        }
+    }, [regionSelectionActive]);
+
+    useEffect(() => () => selectionControlsDragCleanupRef.current?.(), []);
+
+    const keepSelectionControlsInBounds = useCallback(() => {
+        setSelectionControlsPosition(current => {
+            if (!current || !selectionControlsRef.current) return current;
+            const control = selectionControlsRef.current;
+            const rect = control.getBoundingClientRect();
+            const viewport = control.ownerDocument.documentElement;
+            const next = clampOverlayControlPosition({
+                ...current,
+                viewportWidth: viewport.clientWidth,
+                viewportHeight: viewport.clientHeight,
+                controlWidth: rect.width,
+                controlHeight: rect.height,
+            });
+            return next.left === current.left && next.top === current.top ? current : next;
+        });
+    }, []);
+
+    useEffect(() => {
+        window.addEventListener('resize', keepSelectionControlsInBounds);
+        return () => window.removeEventListener('resize', keepSelectionControlsInBounds);
+    }, [keepSelectionControlsInBounds]);
+
+    const beginSelectionControlsDrag = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+        if (!event.isPrimary || event.button !== 0 || !selectionControlsRef.current) return;
+        const target = event.target as HTMLElement;
+        if (target.closest('button')) return;
+
+        const control = event.currentTarget;
+        const rect = control.getBoundingClientRect();
+        const drag = {
+            pointerId: event.pointerId,
+            offsetX: event.clientX - rect.left,
+            offsetY: event.clientY - rect.top,
+            controlWidth: rect.width,
+            controlHeight: rect.height,
+        };
+        selectionControlsDragRef.current = drag;
+
+        selectionControlsDragCleanupRef.current?.();
+        const move = (pointerEvent: PointerEvent) => {
+            if (pointerEvent.pointerId !== drag.pointerId) return;
+            const viewport = control.ownerDocument.documentElement;
+            const next = clampOverlayControlPosition({
+                left: pointerEvent.clientX - drag.offsetX,
+                top: pointerEvent.clientY - drag.offsetY,
+                viewportWidth: viewport.clientWidth,
+                viewportHeight: viewport.clientHeight,
+                controlWidth: drag.controlWidth,
+                controlHeight: drag.controlHeight,
+            });
+            control.style.left = `${next.left}px`;
+            control.style.top = `${next.top}px`;
+            control.style.bottom = 'auto';
+            control.style.transform = 'none';
+            pointerEvent.preventDefault();
+            pointerEvent.stopPropagation();
+        };
+        const finish = (pointerEvent: PointerEvent) => {
+            if (pointerEvent.pointerId !== drag.pointerId) return;
+            selectionControlsDragCleanupRef.current?.();
+            selectionControlsDragRef.current = null;
+            const finalRect = control.getBoundingClientRect();
+            setSelectionControlsPosition({ left: finalRect.left, top: finalRect.top });
+            setSelectionControlsDragging(false);
+            if (control.hasPointerCapture(pointerEvent.pointerId)) {
+                control.releasePointerCapture(pointerEvent.pointerId);
+            }
+            pointerEvent.preventDefault();
+            pointerEvent.stopPropagation();
+        };
+        const cleanup = () => {
+            control.removeEventListener('pointermove', move, true);
+            control.removeEventListener('pointerup', finish, true);
+            control.removeEventListener('pointercancel', finish, true);
+            if (selectionControlsDragCleanupRef.current === cleanup) {
+                selectionControlsDragCleanupRef.current = null;
+            }
+        };
+        selectionControlsDragCleanupRef.current = cleanup;
+        control.addEventListener('pointermove', move, true);
+        control.addEventListener('pointerup', finish, true);
+        control.addEventListener('pointercancel', finish, true);
+
+        setSelectionControlsDragging(true);
+        control.setPointerCapture(event.pointerId);
+        event.preventDefault();
+        event.stopPropagation();
+    }, []);
 
     // Function to calculate the scaling factor based on actual rendered image size
     function getScalingFactor() {
@@ -1039,29 +1153,54 @@ export const TranslatedTextOverlay: VFC<{
                     }}>
                         {t("Tap one or more translated text boxes")}
                     </div>
-                    <Focusable style={{
-                        position: 'fixed',
-                        left: '50%',
-                        bottom: '24px',
-                        transform: 'translateX(-50%)',
-                        zIndex: 7005,
-                        display: 'flex',
-                        gap: '10px',
-                        padding: '10px',
-                        borderRadius: '12px',
-                        background: 'rgba(12, 20, 29, 0.92)',
-                        boxShadow: '0 3px 12px rgba(0, 0, 0, 0.45)',
-                    }}>
-                        <DialogButton onClick={onCancelRegionSelection}>
-                            {t("Cancel")}
-                        </DialogButton>
-                        <DialogButton
-                            onClick={onConfirmRegionSelection}
-                            disabled={selectedRegionIndices.length === 0}
-                        >
-                            {t("Confirm")} ({selectedRegionIndices.length})
-                        </DialogButton>
-                    </Focusable>
+                    <div
+                        ref={selectionControlsRef}
+                        data-region-selection-controls="true"
+                        onPointerDown={beginSelectionControlsDrag}
+                        style={{
+                            position: 'fixed',
+                            left: selectionControlsPosition ? `${selectionControlsPosition.left}px` : '50%',
+                            top: selectionControlsPosition ? `${selectionControlsPosition.top}px` : undefined,
+                            bottom: selectionControlsPosition ? undefined : '24px',
+                            transform: selectionControlsPosition ? 'none' : 'translateX(-50%)',
+                            zIndex: 7005,
+                            width: 'max-content',
+                            height: 'max-content',
+                            cursor: selectionControlsDragging ? 'grabbing' : 'grab',
+                            touchAction: 'none',
+                            userSelect: 'none',
+                        }}>
+                        <div aria-hidden="true" style={{
+                            position: 'absolute',
+                            top: '3px',
+                            left: '50%',
+                            width: '38px',
+                            height: '4px',
+                            transform: 'translateX(-50%)',
+                            borderRadius: '2px',
+                            background: 'rgba(255, 255, 255, 0.48)',
+                            pointerEvents: 'none',
+                            zIndex: 1,
+                        }} />
+                        <Focusable style={{
+                            display: 'flex',
+                            gap: '10px',
+                            padding: '10px',
+                            borderRadius: '12px',
+                            background: 'rgba(12, 20, 29, 0.92)',
+                            boxShadow: '0 3px 12px rgba(0, 0, 0, 0.45)',
+                        }}>
+                            <DialogButton onClick={onCancelRegionSelection}>
+                                {t("Cancel")}
+                            </DialogButton>
+                            <DialogButton
+                                onClick={onConfirmRegionSelection}
+                                disabled={selectedRegionIndices.length === 0}
+                            >
+                                {t("Confirm")} ({selectedRegionIndices.length})
+                            </DialogButton>
+                        </Focusable>
+                    </div>
                 </>
             )}
 
