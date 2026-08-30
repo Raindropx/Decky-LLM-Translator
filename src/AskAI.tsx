@@ -7,7 +7,8 @@ import {
     TextField,
     showModal,
 } from '@decky/ui';
-import { ReactNode, VFC, useEffect, useState } from 'react';
+import { ReactNode, VFC, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { HiOutlineCursorArrowRays, HiOutlinePlus, HiPaperAirplane, HiTrash } from 'react-icons/hi2';
@@ -492,13 +493,53 @@ const ReasoningPanel: VFC<{
 
 const AskAIModal: VFC<{ controller: AskAIController }> = ({ controller }) => {
     const [, setVersion] = useState(0);
+    const modalHostProbeRef = useRef<HTMLSpanElement>(null);
+    const [modalPortalHost, setModalPortalHost] = useState<Element | null>(null);
+    const [steamFooterInset, setSteamFooterInset] = useState(0);
     useEffect(() => controller.subscribe(() => setVersion(value => value + 1)), [controller]);
+    useEffect(() => {
+        const probe = modalHostProbeRef.current;
+        if (!probe) return;
+
+        // Plugin code runs in SharedJSContext, whose global document is only a
+        // hidden 1x1 surface. Resolve the visible Steam modal document from a
+        // node that showModal actually mounted, then bypass only the inner
+        // safe-area positioning layer.
+        const modalOverlay = probe.closest('[id^="ModalDialogOverlay_Modal_"]');
+        setModalPortalHost(modalOverlay ?? probe.ownerDocument.body);
+    }, []);
+    useEffect(() => {
+        if (!modalPortalHost) return;
+
+        // The Steam footer can be mounted after showModal's probe effect runs.
+        // Measure from the portal's visible document after the host is resolved.
+        const modalDocument = modalPortalHost.ownerDocument;
+        const modalWindow = modalDocument.defaultView;
+        const updateSteamFooterInset = () => {
+            const footer = modalDocument.getElementById('Footer');
+            const viewportHeight = modalWindow?.innerHeight ?? 0;
+            const footerRect = footer?.getBoundingClientRect();
+            const inset = footerRect && footerRect.height > 0 && footerRect.top < viewportHeight
+                ? Math.ceil(Math.max(0, viewportHeight - footerRect.top))
+                : 0;
+            setSteamFooterInset(inset);
+        };
+        updateSteamFooterInset();
+        modalWindow?.addEventListener('resize', updateSteamFooterInset);
+        return () => modalWindow?.removeEventListener('resize', updateSteamFooterInset);
+    }, [modalPortalHost]);
 
     const session = controller.getSession();
     if (!session) return null;
 
     let referenceNumber = 0;
+    // Keep the probe in showModal's visible document for the lifetime of the
+    // dialog. The portal remains in the same modal/focus React tree while its
+    // DOM escapes the safe-area positioning descendant.
     return (
+        <>
+            <span ref={modalHostProbeRef} style={{ display: 'none' }} />
+            {modalPortalHost && createPortal(
         <ModalRoot
             onCancel={() => controller.close()}
             onEscKeypress={() => controller.close()}
@@ -515,8 +556,11 @@ const AskAIModal: VFC<{ controller: AskAIController }> = ({ controller }) => {
                     height: 100vh !important;
                     max-width: none !important;
                     max-height: none !important;
+                    padding: 0 !important;
                     margin: 0 !important;
+                    border: 0 !important;
                     border-radius: 0 !important;
+                    overflow: hidden !important;
                     box-sizing: border-box !important;
                 }
                 .ask-ai-fullscreen-root {
@@ -526,6 +570,7 @@ const AskAIModal: VFC<{ controller: AskAIController }> = ({ controller }) => {
                     max-height: none !important;
                     padding: 0 !important;
                     margin: 0 !important;
+                    border: 0 !important;
                     overflow: hidden !important;
                     box-sizing: border-box !important;
                 }
@@ -535,7 +580,10 @@ const AskAIModal: VFC<{ controller: AskAIController }> = ({ controller }) => {
                 height: '100vh',
                 maxWidth: '100vw',
                 maxHeight: '100vh',
-                padding: '20px 28px 16px',
+                // Steam's gamepad footer is mounted after the modal on some
+                // clients, so keep the measured Deck footer plus a 16px gap as
+                // the minimum even when the first dynamic measurement is zero.
+                padding: `20px 28px ${Math.max(58, 16 + steamFooterInset)}px`,
                 boxSizing: 'border-box',
                 display: 'flex',
                 flexDirection: 'column',
@@ -665,6 +713,9 @@ const AskAIModal: VFC<{ controller: AskAIController }> = ({ controller }) => {
                     </DialogButton>
                 </Focusable>
             </div>
-        </ModalRoot>
+                </ModalRoot>,
+                modalPortalHost,
+            )}
+        </>
     );
 };
