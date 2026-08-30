@@ -1,6 +1,6 @@
 {
   "name": "decky-llm-translator",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "type": "module",
   "description": "Translate on-screen game text with configurable LLM endpoints while preserving OCR-based positioning.",
   "scripts": {

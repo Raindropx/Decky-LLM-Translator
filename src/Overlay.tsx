@@ -13,6 +13,8 @@ import { t } from "./i18n";
 import { clampOverlayControlPosition, getTranslationOverlayZIndex } from "./OverlayLayer";
 import type { OverlayControlPosition } from "./OverlayLayer";
 
+const REGION_SELECTION_HINT_DURATION_MS = 3000;
+
 export type HorizontalTextAlignment = 'left' | 'right' | 'center' | 'justify';
 
 export interface ScreenshotOverlaySnapshot {
@@ -667,6 +669,7 @@ export const TranslatedTextOverlay: VFC<{
 
     const [selectionControlsPosition, setSelectionControlsPosition] = useState<OverlayControlPosition | null>(null);
     const [selectionControlsDragging, setSelectionControlsDragging] = useState(false);
+    const [selectionHintVisible, setSelectionHintVisible] = useState(true);
 
     // Load font as a side-effect (network request / DOM injection)
     useEffect(() => {
@@ -724,6 +727,19 @@ export const TranslatedTextOverlay: VFC<{
             setSelectionControlsPosition(null);
             setSelectionControlsDragging(false);
         }
+    }, [regionSelectionActive]);
+
+    useEffect(() => {
+        if (!regionSelectionActive) {
+            setSelectionHintVisible(true);
+            return;
+        }
+
+        const timeout = window.setTimeout(
+            () => setSelectionHintVisible(false),
+            REGION_SELECTION_HINT_DURATION_MS,
+        );
+        return () => window.clearTimeout(timeout);
     }, [regionSelectionActive]);
 
     useEffect(() => () => selectionControlsDragCleanupRef.current?.(), []);
@@ -1137,22 +1153,24 @@ export const TranslatedTextOverlay: VFC<{
 
             {regionSelectionActive && (
                 <>
-                    <div style={{
-                        position: 'fixed',
-                        top: '18px',
-                        left: '50%',
-                        transform: 'translateX(-50%)',
-                        zIndex: 7005,
-                        padding: '10px 16px',
-                        borderRadius: '18px',
-                        background: 'rgba(12, 20, 29, 0.92)',
-                        color: '#fff',
-                        fontSize: '15px',
-                        fontWeight: 600,
-                        boxShadow: '0 3px 12px rgba(0, 0, 0, 0.45)',
-                    }}>
-                        {t("Tap one or more translated text boxes")}
-                    </div>
+                    {selectionHintVisible && (
+                        <div style={{
+                            position: 'fixed',
+                            top: '18px',
+                            left: '50%',
+                            transform: 'translateX(-50%)',
+                            zIndex: 7005,
+                            padding: '10px 16px',
+                            borderRadius: '18px',
+                            background: 'rgba(12, 20, 29, 0.92)',
+                            color: '#fff',
+                            fontSize: '15px',
+                            fontWeight: 600,
+                            boxShadow: '0 3px 12px rgba(0, 0, 0, 0.45)',
+                        }}>
+                            {t("Tap one or more translated text boxes")}
+                        </div>
+                    )}
                     <div
                         ref={selectionControlsRef}
                         data-region-selection-controls="true"
